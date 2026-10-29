@@ -104,3 +104,9 @@ Pour `PATCH /tickets/:id/status`, envoyer par exemple :
 ```
 
 Statuts autorisés : `OPEN`, `IN_PROGRESS`, `CLOSED`.
+
+Les routes `/tickets` demandent le header
+`Authorization: Bearer <accessToken>`. Les quatre rôles peuvent créer un
+ticket. La lecture et le changement de statut sont réservés à
+`SUPER_ADMIN`, `ADMIN` et `AGENT`. Un token absent ou invalide donne `401` ;
+un rôle insuffisant donne `403`.
