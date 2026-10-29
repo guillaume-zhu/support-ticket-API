@@ -91,6 +91,8 @@ nouvelle paire. L'ancien refresh token ne peut plus être réutilisé.
 | GET     | `/tickets/:id`        | Lire un ticket      |
 | PATCH   | `/tickets/:id/status` | Modifier son statut |
 | POST    | `/users`              | Créer un compte invité |
+| POST    | `/users/:id/invitation` | Envoyer une invitation |
+| POST    | `/auth/accept-invitation` | Activer un compte |
 
 Pour `POST /tickets`, envoyer un corps JSON :
 
@@ -121,3 +123,20 @@ un rôle insuffisant donne `403`.
 La réponse `201` contient `id`, `email`, `role` et `status: "INVITED"`.
 Les rôles autorisés à la création sont `ADMIN`, `AGENT` et `USER`.
 Un email invalide ou un rôle inconnu donne `400` ; un email déjà utilisé donne `409`.
+
+## Invitations
+
+Dans `.env`, renseigner `RESEND_API_KEY` et `RESEND_FROM_EMAIL` avec une adresse
+expéditrice autorisée par Resend. Ces valeurs ne doivent pas être commitées.
+
+Un Super Admin appelle `POST /users/:id/invitation` avec son access token.
+L'API transmet un code valable 24 heures à l'email de l'utilisateur et répond `202`.
+Un nouvel envoi invalide le code précédent.
+
+Le destinataire appelle `POST /auth/accept-invitation` avec :
+
+```json
+{ "token": "code reçu par email", "password": "mot de passe de 15 caractères minimum" }
+```
+
+La réponse est `204`. Le code ne fonctionne plus ensuite ; le compte peut se connecter.

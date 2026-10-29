@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto"
 import type { Request, Response } from "express"
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js"
 
@@ -31,6 +32,67 @@ export function usersController(prisma: PrismaClient) {
         }
         throw error
       }
+    },
+
+    invite: async (req: Request, res: Response) => {
+      // Vérifier que le compte existe et attend son activation.
+      const id = Number(req.params.id)
+      if (!Number.isSafeInteger(id) || id < 1) {
+        return res.status(400).json({ error: "id invalide" })
+      }
+      const user = await prisma.user.findUnique({
+        where: { id },
+        select: { email: true, status: true, passwordHash: true },
+      })
+      if (!user) {
+        return res.status(404).json({ error: "utilisateur introuvable" })
+      }
+      if (user.status !== "INVITED" || user.passwordHash) {
+        return res.status(409).json({ error: "utilisateur non invitable" })
+      }
+
+      const apiKey = process.env.RESEND_API_KEY
+      const from = process.env.RESEND_FROM_EMAIL
+      if (!apiKey || !from) {
+        return res.status(503).json({ error: "envoi d'email non configuré" })
+      }
+
+      // Remplacer les anciennes invitations par un code temporaire dont seul le hash est conservé.
+      const token = randomBytes(32).toString("base64url")
+      const tokenHash = createHash("sha256").update(token).digest("hex")
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
+      await prisma.$transaction(async (tx) => {
+        await tx.actionToken.deleteMany({ where: { userId: id, purpose: "INVITATION" } })
+        await tx.actionToken.create({
+          data: { tokenHash, userId: id, purpose: "INVITATION", expiresAt },
+        })
+      })
+
+      // Envoyer le code à l'adresse du compte, sans l'exposer dans la réponse HTTP.
+      let sent = false
+      try {
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from,
+            to: [user.email],
+            subject: "Invitation à Support Ticket API",
+            text: `Votre code d'invitation : ${token}\nValable 24 heures.\nPour activer votre compte, envoyez ce code et votre nouveau mot de passe à POST /auth/accept-invitation.`,
+          }),
+          signal: AbortSignal.timeout(10_000),
+        })
+        sent = response.ok
+      } catch {
+        sent = false
+      }
+      if (!sent) {
+        return res.status(502).json({ error: "envoi de l'invitation impossible" })
+      }
+      return res.status(202).json({ message: "Invitation transmise" })
     },
   }
 }

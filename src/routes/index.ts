@@ -14,8 +14,9 @@ export function registerRoutes(app: Express, prisma: PrismaClient) {
   const staff = requireRoles("SUPER_ADMIN", "ADMIN", "AGENT")
   const allRoles = requireRoles("SUPER_ADMIN", "ADMIN", "AGENT", "USER")
 
-  // Garder les routes de connexion accessibles sans access token.
+  // Laisser les opérations d'authentification et d'activation accessibles sans access token.
   app.post("/auth/login", auth.login)
+  app.post("/auth/accept-invitation", auth.acceptInvitation)
   app.post("/auth/refresh", auth.refresh)
   app.post("/auth/logout", auth.logout)
 
@@ -26,6 +27,7 @@ export function registerRoutes(app: Express, prisma: PrismaClient) {
   app.post("/tickets", authenticated, allRoles, tickets.create)
   app.patch("/tickets/:id/status", authenticated, staff, tickets.updateStatus)
 
-  // Réserver la création des comptes au Super Admin connecté.
+  // Réserver la création des comptes et l'envoi des invitations au Super Admin connecté.
   app.post("/users", authenticated, requireRoles("SUPER_ADMIN"), users.create)
+  app.post("/users/:id/invitation", authenticated, requireRoles("SUPER_ADMIN"), users.invite)
 }
