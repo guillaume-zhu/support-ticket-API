@@ -90,6 +90,7 @@ nouvelle paire. L'ancien refresh token ne peut plus être réutilisé.
 | POST    | `/tickets`            | Créer un ticket     |
 | GET     | `/tickets/:id`        | Lire un ticket      |
 | PATCH   | `/tickets/:id/status` | Modifier son statut |
+| POST    | `/users`              | Créer un compte invité |
 
 Pour `POST /tickets`, envoyer un corps JSON :
 
@@ -110,3 +111,13 @@ Les routes `/tickets` demandent le header
 ticket. La lecture et le changement de statut sont réservés à
 `SUPER_ADMIN`, `ADMIN` et `AGENT`. Un token absent ou invalide donne `401` ;
 un rôle insuffisant donne `403`.
+
+`POST /users` demande un access token de `SUPER_ADMIN` et un corps JSON :
+
+```json
+{ "email": "nouveau@example.com", "role": "AGENT" }
+```
+
+La réponse `201` contient `id`, `email`, `role` et `status: "INVITED"`.
+Les rôles autorisés à la création sont `ADMIN`, `AGENT` et `USER`.
+Un email invalide ou un rôle inconnu donne `400` ; un email déjà utilisé donne `409`.
