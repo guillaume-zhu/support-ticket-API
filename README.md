@@ -2,6 +2,8 @@
 
 API de tickets créée avec Express, TypeScript, PostgreSQL et Prisma.
 
+Auteur : Guillaume Zhu - WEB2 - HETIC
+
 ## Prérequis
 
 - Node.js 24
@@ -48,23 +50,23 @@ L'API est disponible sur `http://localhost:3000`.
 
 ## Routes
 
-| Méthode | URL | Action |
-| --- | --- | --- |
-| GET | `/tickets` | Lister les tickets |
-| POST | `/tickets` | Créer un ticket |
-| GET | `/tickets/:id` | Lire un ticket |
-| PATCH | `/tickets/:id/status` | Modifier son statut |
+| Méthode | URL                   | Action              |
+| ------- | --------------------- | ------------------- |
+| GET     | `/tickets`            | Lister les tickets  |
+| POST    | `/tickets`            | Créer un ticket     |
+| GET     | `/tickets/:id`        | Lire un ticket      |
+| PATCH   | `/tickets/:id/status` | Modifier son statut |
 
 Pour `POST /tickets`, envoyer un corps JSON :
 
 ```json
-{"title":"Connexion","description":"Je ne peux pas me connecter"}
+{ "title": "Connexion", "description": "Je ne peux pas me connecter" }
 ```
 
 Pour `PATCH /tickets/:id/status`, envoyer par exemple :
 
 ```json
-{"status":"IN_PROGRESS"}
+{ "status": "IN_PROGRESS" }
 ```
 
 Statuts autorisés : `OPEN`, `IN_PROGRESS`, `CLOSED`.
