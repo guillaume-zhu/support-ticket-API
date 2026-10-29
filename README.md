@@ -60,10 +60,27 @@ Remplacer l'adresse par celle du premier administrateur. Le mot de passe est
 demandé deux fois sans s'afficher. La commande refuse de créer un compte si
 un Super Admin existe déjà. Il n'y a pas de route d'inscription publique.
 
+## Connexion
+
+Dans `.env`, ajouter deux secrets JWT différents. Pour générer une valeur, exécuter
+deux fois cette commande et copier chaque résultat dans une variable différente :
+
+```bash
+node -e 'console.log(require("node:crypto").randomBytes(32).toString("base64url"))'
+```
+
+`POST /auth/login` reçoit `email` et `password` en JSON et renvoie
+`accessToken` (15 minutes) et `refreshToken` (7 jours).
+
+```json
+{ "email": "admin@example.com", "password": "votre mot de passe" }
+```
+
 ## Routes
 
 | Méthode | URL                   | Action              |
 | ------- | --------------------- | ------------------- |
+| POST    | `/auth/login`         | Se connecter        |
 | GET     | `/tickets`            | Lister les tickets  |
 | POST    | `/tickets`            | Créer un ticket     |
 | GET     | `/tickets/:id`        | Lire un ticket      |

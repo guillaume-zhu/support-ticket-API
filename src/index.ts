@@ -2,6 +2,7 @@ import "dotenv/config"
 import express from "express"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { PrismaClient } from "./generated/prisma/client.js"
+import { authRouter } from "./auth.js"
 
 const app = express()
 const PORT = 3000
@@ -15,6 +16,7 @@ const prisma = new PrismaClient({
 })
 
 app.use(express.json())
+app.use("/auth", authRouter(prisma))
 
 // Réponse a une réponse GET
 app.get("/tickets", async (req, res) => {
