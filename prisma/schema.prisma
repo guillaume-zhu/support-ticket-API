@@ -20,3 +20,47 @@ model Ticket {
   description String
   status      TicketStatus @default(OPEN)
 }
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  AGENT
+  USER
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+enum ActionTokenPurpose {
+  INVITATION
+  PASSWORD_RESET
+}
+
+model User {
+  id           Int           @id @default(autoincrement())
+  email        String        @unique
+  passwordHash String?
+  role         Role
+  status       UserStatus    @default(INVITED)
+  sessions     Session[]
+  actionTokens ActionToken[]
+}
+
+model Session {
+  id        String    @id @default(uuid())
+  userId    Int
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+}
+
+model ActionToken {
+  tokenHash String             @id
+  userId    Int
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose   ActionTokenPurpose
+  expiresAt DateTime
+}
