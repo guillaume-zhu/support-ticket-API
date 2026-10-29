@@ -1,27 +1,29 @@
+import "dotenv/config"
 import express from "express"
+import { PrismaPg } from "@prisma/adapter-pg"
+import { PrismaClient } from "./generated/prisma/client.js"
 
 const app = express()
 const PORT = 3000
 
-// Ticket
-type Ticket = {
-  id: number
-  title: string
-  description: string
-  status: "OPEN" | "IN_PROGRESS" | "CLOSED"
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL manquante")
 }
 
-const tickets: Ticket[] = []
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+})
 
 app.use(express.json())
 
 // Réponse a une réponse GET
-app.get("/tickets", (req, res) => {
+app.get("/tickets", async (req, res) => {
+  const tickets = await prisma.ticket.findMany({ orderBy: { id: "asc" } })
   res.json(tickets)
 })
 
 // Réponse a une méthode GET avec id en params
-app.get("/tickets/:id", (req, res) => {
+app.get("/tickets/:id", async (req, res) => {
   const id = Number(req.params.id)
 
   // Vérification type id
@@ -29,7 +31,7 @@ app.get("/tickets/:id", (req, res) => {
     return res.status(400).json({ error: "id invalide" })
   }
 
-  const ticket = tickets.find((ticket) => ticket.id === id)
+  const ticket = await prisma.ticket.findUnique({ where: { id } })
 
   if (!ticket) {
     return res.status(404).json({ error: "ticket introuvable" })
@@ -39,7 +41,7 @@ app.get("/tickets/:id", (req, res) => {
 })
 
 // Réponse a une methode POST
-app.post("/tickets", (req, res) => {
+app.post("/tickets", async (req, res) => {
   const { title, description } = req.body ?? {}
 
   // Vérification de title et description
@@ -52,25 +54,26 @@ app.post("/tickets", (req, res) => {
     return res.status(400).json({ error: "title et description sont requis" })
   }
 
-  const ticket: Ticket = {
-    id: tickets.length + 1,
-    title: title.trim(),
-    description: description.trim(),
-    status: "OPEN",
-  }
+  const ticket = await prisma.ticket.create({
+    data: {
+      title: title.trim(),
+      description: description.trim(),
+    },
+  })
 
-  tickets.push(ticket)
   return res.status(201).json(ticket)
 })
 
-app.patch("/tickets/:id/status", (req, res) => {
+// Réponse à méthode Patch
+app.patch("/tickets/:id/status", async (req, res) => {
   const id = Number(req.params.id)
 
+  // Verification nombre entier
   if (!Number.isSafeInteger(id) || id < 1) {
     return res.status(400).json({ error: "id invalide" })
   }
 
-  const ticket = tickets.find((ticket) => ticket.id === id)
+  const ticket = await prisma.ticket.findUnique({ where: { id } })
 
   if (!ticket) {
     return res.status(404).json({ error: "ticket introuvable" })
@@ -78,16 +81,15 @@ app.patch("/tickets/:id/status", (req, res) => {
 
   const status: unknown = req.body?.status
 
-  if (
-    status !== "OPEN" &&
-    status !== "IN_PROGRESS" &&
-    status !== "CLOSED"
-  ) {
+  if (status !== "OPEN" && status !== "IN_PROGRESS" && status !== "CLOSED") {
     return res.status(400).json({ error: "status invalide" })
   }
 
-  ticket.status = status
-  return res.json(ticket)
+  const updated = await prisma.ticket.update({
+    where: { id },
+    data: { status },
+  })
+  return res.json(updated)
 })
 
 // Démarrage du serveur sur le port 3000
