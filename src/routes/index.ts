@@ -1,6 +1,8 @@
 import type { Express } from "express"
 import type { PrismaClient } from "../generated/prisma/client.js"
 import { authController } from "../controllers/auth.controller.js"
+import { invitationsController } from "../controllers/invitations.controller.js"
+import { passwordResetController } from "../controllers/password-reset.controller.js"
 import { ticketsController } from "../controllers/tickets.controller.js"
 import { usersController } from "../controllers/users.controller.js"
 import { authenticate, requireRoles } from "../middlewares/auth.js"
@@ -8,6 +10,8 @@ import { authenticate, requireRoles } from "../middlewares/auth.js"
 export function registerRoutes(app: Express, prisma: PrismaClient) {
   // Préparer les controllers et les contrôles communs aux routes.
   const auth = authController(prisma)
+  const invitations = invitationsController(prisma)
+  const passwordReset = passwordResetController(prisma)
   const tickets = ticketsController(prisma)
   const users = usersController(prisma)
   const authenticated = authenticate(prisma)
@@ -16,9 +20,9 @@ export function registerRoutes(app: Express, prisma: PrismaClient) {
 
   // Laisser les opérations d'authentification et d'activation accessibles sans access token.
   app.post("/auth/login", auth.login)
-  app.post("/auth/accept-invitation", auth.acceptInvitation)
-  app.post("/auth/request-password-reset", auth.requestPasswordReset)
-  app.post("/auth/reset-password", auth.resetPassword)
+  app.post("/auth/accept-invitation", invitations.acceptInvitation)
+  app.post("/auth/request-password-reset", passwordReset.requestPasswordReset)
+  app.post("/auth/reset-password", passwordReset.resetPassword)
   app.post("/auth/refresh", auth.refresh)
   app.post("/auth/logout", auth.logout)
 
