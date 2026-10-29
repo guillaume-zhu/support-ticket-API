@@ -63,6 +63,33 @@ app.post("/tickets", (req, res) => {
   return res.status(201).json(ticket)
 })
 
+app.patch("/tickets/:id/status", (req, res) => {
+  const id = Number(req.params.id)
+
+  if (!Number.isSafeInteger(id) || id < 1) {
+    return res.status(400).json({ error: "id invalide" })
+  }
+
+  const ticket = tickets.find((ticket) => ticket.id === id)
+
+  if (!ticket) {
+    return res.status(404).json({ error: "ticket introuvable" })
+  }
+
+  const status: unknown = req.body?.status
+
+  if (
+    status !== "OPEN" &&
+    status !== "IN_PROGRESS" &&
+    status !== "CLOSED"
+  ) {
+    return res.status(400).json({ error: "status invalide" })
+  }
+
+  ticket.status = status
+  return res.json(ticket)
+})
+
 // Démarrage du serveur sur le port 3000
 app.listen(PORT, () => {
   console.log(`Serveur lancé sur le port ${PORT}`)
