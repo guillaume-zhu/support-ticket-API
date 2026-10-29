@@ -20,6 +20,24 @@ app.get("/tickets", (req, res) => {
   res.json(tickets)
 })
 
+// Réponse a une méthode GET avec id en params
+app.get("/tickets/:id", (req, res) => {
+  const id = Number(req.params.id)
+
+  // Vérification type id
+  if (!Number.isSafeInteger(id) || id < 1) {
+    return res.status(400).json({ error: "id invalide" })
+  }
+
+  const ticket = tickets.find((ticket) => ticket.id === id)
+
+  if (!ticket) {
+    return res.status(404).json({ error: "ticket introuvable" })
+  }
+
+  return res.json(ticket)
+})
+
 // Réponse a une methode POST
 app.post("/tickets", (req, res) => {
   const { title, description } = req.body ?? {}
