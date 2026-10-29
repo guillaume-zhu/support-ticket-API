@@ -32,4 +32,8 @@ export function registerRoutes(app: Express, prisma: PrismaClient) {
   // Réserver la création des comptes et l'envoi des invitations au Super Admin connecté.
   app.post("/users", authenticated, requireRoles("SUPER_ADMIN"), users.create)
   app.post("/users/:id/invitation", authenticated, requireRoles("SUPER_ADMIN"), users.invite)
+
+  // Réserver la désactivation et la réactivation au Super Admin connecté.
+  app.patch("/users/:id/disable", authenticated, requireRoles("SUPER_ADMIN"), users.disable)
+  app.patch("/users/:id/enable", authenticated, requireRoles("SUPER_ADMIN"), users.enable)
 }

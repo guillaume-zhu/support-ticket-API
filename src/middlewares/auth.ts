@@ -26,13 +26,18 @@ export function authenticate(prisma: PrismaClient): RequestHandler {
       algorithms: ["HS256"],
       issuer: "support-ticket-api",
       audience: "support-ticket-api",
-      requiredClaims: ["sub", "exp"],
+      requiredClaims: ["sub", "jti", "exp"],
       maxTokenAge: "15m",
     })
       .then(({ payload }) => payload)
       .catch(() => null)
 
-    if (!claims || claims.token_use !== "access" || typeof claims.sub !== "string") {
+    if (
+      !claims ||
+      claims.token_use !== "access" ||
+      typeof claims.sub !== "string" ||
+      typeof claims.jti !== "string"
+    ) {
       return res.status(401).json({ error: "Authentification requise" })
     }
 
@@ -47,6 +52,20 @@ export function authenticate(prisma: PrismaClient): RequestHandler {
       select: { id: true, role: true, status: true },
     })
     if (!user || user.status !== "ACTIVE") {
+      return res.status(401).json({ error: "Authentification requise" })
+    }
+
+    // Vérifier que la session liée au token est encore active.
+    const session = await prisma.session.findUnique({
+      where: { id: claims.jti },
+      select: { userId: true, revokedAt: true, expiresAt: true },
+    })
+    if (
+      !session ||
+      session.userId !== userId ||
+      session.revokedAt ||
+      session.expiresAt <= new Date()
+    ) {
       return res.status(401).json({ error: "Authentification requise" })
     }
 

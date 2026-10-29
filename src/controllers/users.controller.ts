@@ -94,5 +94,74 @@ export function usersController(prisma: PrismaClient) {
       }
       return res.status(202).json({ message: "Invitation transmise" })
     },
+
+    disable: async (req: Request, res: Response) => {
+      // Vérifier le compte et refuser la désactivation du Super Admin.
+      const id = Number(req.params.id)
+      if (!Number.isSafeInteger(id) || id < 1) {
+        return res.status(400).json({ error: "id invalide" })
+      }
+      const user = await prisma.user.findUnique({
+        where: { id },
+        select: { id: true, email: true, role: true, status: true },
+      })
+      if (!user) {
+        return res.status(404).json({ error: "utilisateur introuvable" })
+      }
+      if (user.role === "SUPER_ADMIN") {
+        return res.status(403).json({ error: "Super Admin non désactivable" })
+      }
+      if (user.status !== "ACTIVE") {
+        return res.status(409).json({ error: "compte non actif" })
+      }
+
+      // Changer le statut et révoquer toutes les sessions dans une transaction.
+      const disabled = await prisma.$transaction(async (tx) => {
+        const updated = await tx.user.updateMany({
+          where: { id, status: "ACTIVE", role: { not: "SUPER_ADMIN" } },
+          data: { status: "DISABLED" },
+        })
+        if (updated.count !== 1) {
+          return false
+        }
+        await tx.session.updateMany({
+          where: { userId: id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        })
+        return true
+      })
+      if (!disabled) {
+        return res.status(409).json({ error: "statut du compte modifié" })
+      }
+      return res.json({ ...user, status: "DISABLED" })
+    },
+
+    enable: async (req: Request, res: Response) => {
+      // Vérifier que le compte existe et qu'il est désactivé.
+      const id = Number(req.params.id)
+      if (!Number.isSafeInteger(id) || id < 1) {
+        return res.status(400).json({ error: "id invalide" })
+      }
+      const user = await prisma.user.findUnique({
+        where: { id },
+        select: { id: true, email: true, role: true, status: true },
+      })
+      if (!user) {
+        return res.status(404).json({ error: "utilisateur introuvable" })
+      }
+      if (user.status !== "DISABLED") {
+        return res.status(409).json({ error: "compte non désactivé" })
+      }
+
+      // Réactiver le compte sans restaurer ses anciennes sessions.
+      const updated = await prisma.user.updateMany({
+        where: { id, status: "DISABLED" },
+        data: { status: "ACTIVE" },
+      })
+      if (updated.count !== 1) {
+        return res.status(409).json({ error: "statut du compte modifié" })
+      }
+      return res.json({ ...user, status: "ACTIVE" })
+    },
   }
 }

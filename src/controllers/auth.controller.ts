@@ -33,6 +33,7 @@ export function authController(prisma: PrismaClient) {
     const accessToken = await new SignJWT({ token_use: "access" })
       .setProtectedHeader({ alg: "HS256" })
       .setSubject(String(userId))
+      .setJti(sessionId)
       .setIssuer(ISSUER)
       .setAudience(AUDIENCE)
       .setIssuedAt()

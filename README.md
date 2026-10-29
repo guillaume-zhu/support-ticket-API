@@ -74,6 +74,7 @@ node -e 'console.log(require("node:crypto").randomBytes(32).toString("base64url"
 `POST /auth/refresh` reçoit `{ "refreshToken": "..." }` et renvoie une
 nouvelle paire. L'ancien refresh token ne peut plus être réutilisé.
 `POST /auth/logout` reçoit le même format et révoque la session liée au token.
+Les access tokens sont également liés à leur session et refusés après sa révocation.
 
 ```json
 { "email": "admin@example.com", "password": "votre mot de passe" }
@@ -95,6 +96,8 @@ nouvelle paire. L'ancien refresh token ne peut plus être réutilisé.
 | POST    | `/auth/accept-invitation` | Activer un compte |
 | POST    | `/auth/request-password-reset` | Demander un code de réinitialisation |
 | POST    | `/auth/reset-password` | Définir un nouveau mot de passe |
+| PATCH   | `/users/:id/disable` | Désactiver un compte |
+| PATCH   | `/users/:id/enable` | Réactiver un compte |
 
 Pour `POST /tickets`, envoyer un corps JSON :
 
@@ -158,3 +161,10 @@ qu'après 5 minutes.
 
 La réponse `204` confirme le changement. Le code est consommé et les refresh
 tokens existants sont révoqués. Un code invalide, expiré ou réutilisé donne `400`.
+
+## Désactiver ou réactiver un compte
+
+Un Super Admin appelle `PATCH /users/:id/disable` pour désactiver un compte
+actif et révoquer ses sessions. `PATCH /users/:id/enable` réactive un compte
+désactivé ; l'utilisateur doit ensuite se reconnecter. Les comptes `INVITED`
+ne sont pas modifiés par ces routes, et le Super Admin ne peut pas être désactivé.
