@@ -48,6 +48,18 @@ npm run dev
 
 L'API est disponible sur `http://localhost:3000`.
 
+## Premier Super Admin
+
+Une fois la migration appliquée, exécuter dans le dossier du projet :
+
+```bash
+npm run bootstrap:super-admin -- admin@example.com
+```
+
+Remplacer l'adresse par celle du premier administrateur. Le mot de passe est
+demandé deux fois sans s'afficher. La commande refuse de créer un compte si
+un Super Admin existe déjà. Il n'y a pas de route d'inscription publique.
+
 ## Routes
 
 | Méthode | URL                   | Action              |
