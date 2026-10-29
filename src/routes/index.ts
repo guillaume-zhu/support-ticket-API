@@ -17,6 +17,8 @@ export function registerRoutes(app: Express, prisma: PrismaClient) {
   // Laisser les opérations d'authentification et d'activation accessibles sans access token.
   app.post("/auth/login", auth.login)
   app.post("/auth/accept-invitation", auth.acceptInvitation)
+  app.post("/auth/request-password-reset", auth.requestPasswordReset)
+  app.post("/auth/reset-password", auth.resetPassword)
   app.post("/auth/refresh", auth.refresh)
   app.post("/auth/logout", auth.logout)
 

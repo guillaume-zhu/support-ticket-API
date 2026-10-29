@@ -93,6 +93,8 @@ nouvelle paire. L'ancien refresh token ne peut plus être réutilisé.
 | POST    | `/users`              | Créer un compte invité |
 | POST    | `/users/:id/invitation` | Envoyer une invitation |
 | POST    | `/auth/accept-invitation` | Activer un compte |
+| POST    | `/auth/request-password-reset` | Demander un code de réinitialisation |
+| POST    | `/auth/reset-password` | Définir un nouveau mot de passe |
 
 Pour `POST /tickets`, envoyer un corps JSON :
 
@@ -140,3 +142,19 @@ Le destinataire appelle `POST /auth/accept-invitation` avec :
 ```
 
 La réponse est `204`. Le code ne fonctionne plus ensuite ; le compte peut se connecter.
+
+## Réinitialiser un mot de passe
+
+`POST /auth/request-password-reset` reçoit `{ "email": "adresse@example.com" }`
+et répond `202`, que le compte existe ou non. Si le compte est actif, un code
+valable 1 heure est envoyé par email. Un nouveau code ne peut être demandé
+qu'après 5 minutes.
+
+`POST /auth/reset-password` reçoit :
+
+```json
+{ "token": "code reçu par email", "password": "nouveau mot de passe de 15 caractères minimum" }
+```
+
+La réponse `204` confirme le changement. Le code est consommé et les refresh
+tokens existants sont révoqués. Un code invalide, expiré ou réutilisé donne `400`.
