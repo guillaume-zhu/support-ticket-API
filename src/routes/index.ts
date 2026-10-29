@@ -8,6 +8,7 @@ export function registerRoutes(app: Express, prisma: PrismaClient) {
   const tickets = ticketsController(prisma)
 
   app.post("/auth/login", auth.login)
+  app.post("/auth/refresh", auth.refresh)
   app.get("/tickets", tickets.list)
   app.get("/tickets/:id", tickets.getById)
   app.post("/tickets", tickets.create)

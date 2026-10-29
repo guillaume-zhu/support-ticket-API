@@ -71,6 +71,8 @@ node -e 'console.log(require("node:crypto").randomBytes(32).toString("base64url"
 
 `POST /auth/login` reçoit `email` et `password` en JSON et renvoie
 `accessToken` (15 minutes) et `refreshToken` (7 jours).
+`POST /auth/refresh` reçoit `{ "refreshToken": "..." }` et renvoie une
+nouvelle paire. L'ancien refresh token ne peut plus être réutilisé.
 
 ```json
 { "email": "admin@example.com", "password": "votre mot de passe" }
@@ -81,6 +83,7 @@ node -e 'console.log(require("node:crypto").randomBytes(32).toString("base64url"
 | Méthode | URL                   | Action              |
 | ------- | --------------------- | ------------------- |
 | POST    | `/auth/login`         | Se connecter        |
+| POST    | `/auth/refresh`       | Renouveler les tokens |
 | GET     | `/tickets`            | Lister les tickets  |
 | POST    | `/tickets`            | Créer un ticket     |
 | GET     | `/tickets/:id`        | Lire un ticket      |
