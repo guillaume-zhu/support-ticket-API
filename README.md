@@ -73,6 +73,7 @@ node -e 'console.log(require("node:crypto").randomBytes(32).toString("base64url"
 `accessToken` (15 minutes) et `refreshToken` (7 jours).
 `POST /auth/refresh` reçoit `{ "refreshToken": "..." }` et renvoie une
 nouvelle paire. L'ancien refresh token ne peut plus être réutilisé.
+`POST /auth/logout` reçoit le même format et révoque la session liée au token.
 
 ```json
 { "email": "admin@example.com", "password": "votre mot de passe" }
@@ -84,6 +85,7 @@ nouvelle paire. L'ancien refresh token ne peut plus être réutilisé.
 | ------- | --------------------- | ------------------- |
 | POST    | `/auth/login`         | Se connecter        |
 | POST    | `/auth/refresh`       | Renouveler les tokens |
+| POST    | `/auth/logout`        | Se déconnecter        |
 | GET     | `/tickets`            | Lister les tickets  |
 | POST    | `/tickets`            | Créer un ticket     |
 | GET     | `/tickets/:id`        | Lire un ticket      |

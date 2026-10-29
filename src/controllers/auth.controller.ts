@@ -51,6 +51,34 @@ export function authController(prisma: PrismaClient) {
     return { accessToken, refreshToken }
   }
 
+  // Vérifier le refresh JWT avant de consulter sa session.
+  const verifyRefreshToken = async (token: string) => {
+    const claims = await jwtVerify(token, refreshKey, {
+      algorithms: ["HS256"],
+      issuer: ISSUER,
+      audience: AUDIENCE,
+      requiredClaims: ["sub", "jti", "exp"],
+    })
+      .then(({ payload }) => payload)
+      .catch(() => null)
+
+    if (
+      !claims ||
+      claims.token_use !== "refresh" ||
+      typeof claims.sub !== "string" ||
+      typeof claims.jti !== "string"
+    ) {
+      return null
+    }
+
+    const userId = Number(claims.sub)
+    if (!Number.isSafeInteger(userId) || userId < 1 || String(userId) !== claims.sub) {
+      return null
+    }
+
+    return { userId, sessionId: claims.jti }
+  }
+
   return {
     // Vérification des identifiants de connexion
     login: async (req: Request, res: Response) => {
@@ -95,31 +123,13 @@ export function authController(prisma: PrismaClient) {
         return res.status(400).json({ error: "refreshToken requis" })
       }
 
-      const claims = await jwtVerify(refreshToken, refreshKey, {
-        algorithms: ["HS256"],
-        issuer: ISSUER,
-        audience: AUDIENCE,
-        requiredClaims: ["sub", "jti", "exp"],
-      })
-        .then(({ payload }) => payload)
-        .catch(() => null)
-
-      if (
-        !claims ||
-        claims.token_use !== "refresh" ||
-        typeof claims.sub !== "string" ||
-        typeof claims.jti !== "string"
-      ) {
-        return res.status(401).json({ error: "Refresh token invalide" })
-      }
-
-      const userId = Number(claims.sub)
-      if (!Number.isSafeInteger(userId) || userId < 1 || String(userId) !== claims.sub) {
+      const verified = await verifyRefreshToken(refreshToken)
+      if (!verified) {
         return res.status(401).json({ error: "Refresh token invalide" })
       }
 
       // Préparer une nouvelle session et une nouvelle paire de JWT
-      const oldSessionId = claims.jti
+      const { userId, sessionId: oldSessionId } = verified
       const newSessionId = randomUUID()
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
       const tokens = await issueTokens(userId, newSessionId, expiresAt)
@@ -166,6 +176,35 @@ export function authController(prisma: PrismaClient) {
         return res.status(401).json({ error: "Refresh token invalide" })
       }
       return res.json(tokens)
+    },
+
+    logout: async (req: Request, res: Response) => {
+      const { refreshToken } = req.body ?? {}
+      if (typeof refreshToken !== "string" || refreshToken === "") {
+        return res.status(400).json({ error: "refreshToken requis" })
+      }
+
+      const verified = await verifyRefreshToken(refreshToken)
+      if (!verified) {
+        return res.status(401).json({ error: "Refresh token invalide" })
+      }
+
+      // Révoquer uniquement la session encore active liée au token.
+      const now = new Date()
+      const revoked = await prisma.session.updateMany({
+        where: {
+          id: verified.sessionId,
+          userId: verified.userId,
+          revokedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { revokedAt: now },
+      })
+      if (revoked.count !== 1) {
+        return res.status(401).json({ error: "Refresh token invalide" })
+      }
+
+      return res.sendStatus(204)
     },
   }
 }
