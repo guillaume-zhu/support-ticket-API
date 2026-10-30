@@ -2,7 +2,7 @@ import "dotenv/config"
 import * as argon2 from "argon2"
 import password from "@inquirer/password"
 import { PrismaPg } from "@prisma/adapter-pg"
-import { PrismaClient } from "./generated/prisma/client.js"
+import { PrismaClient } from "../src/generated/prisma/client.js"
 
 async function main() {
   const email = process.argv[2]?.trim().toLowerCase()
