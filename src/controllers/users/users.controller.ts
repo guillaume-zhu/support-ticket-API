@@ -1,12 +1,7 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import { usersService } from "../../services/users/users.service.js"
-
-// Lire l'id du compte dans l'URL (null s'il est invalide)
-function readUserId(req: Request) {
-  const id = Number(req.params.id)
-  return Number.isSafeInteger(id) && id >= 1 ? id : null
-}
+import { isValidEmail, normalizeEmail, parseId } from "../../utils/validation.js"
 
 // Lecture des requêtes HTTP de gestion des comptes ; la logique métier est dans usersService
 export function usersController(prisma: PrismaClient) {
@@ -16,12 +11,8 @@ export function usersController(prisma: PrismaClient) {
     create: async (req: Request, res: Response) => {
       // Vérifier et normaliser les données envoyées par le Super Admin.
       const { email, role } = req.body ?? {}
-      const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : ""
-      if (
-        !normalizedEmail ||
-        normalizedEmail.length > 254 ||
-        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)
-      ) {
+      const normalizedEmail = normalizeEmail(email)
+      if (!isValidEmail(normalizedEmail)) {
         return res.status(400).json({ error: "email invalide" })
       }
       if (role !== "ADMIN" && role !== "AGENT" && role !== "USER") {
@@ -36,8 +27,8 @@ export function usersController(prisma: PrismaClient) {
     },
 
     invite: async (req: Request, res: Response) => {
-      const id = readUserId(req)
-      if (!id) {
+      const id = parseId(req.params.id)
+      if (id === null) {
         return res.status(400).json({ error: "id invalide" })
       }
 
@@ -58,8 +49,8 @@ export function usersController(prisma: PrismaClient) {
     },
 
     disable: async (req: Request, res: Response) => {
-      const id = readUserId(req)
-      if (!id) {
+      const id = parseId(req.params.id)
+      if (id === null) {
         return res.status(400).json({ error: "id invalide" })
       }
 
@@ -80,8 +71,8 @@ export function usersController(prisma: PrismaClient) {
     },
 
     enable: async (req: Request, res: Response) => {
-      const id = readUserId(req)
-      if (!id) {
+      const id = parseId(req.params.id)
+      if (id === null) {
         return res.status(400).json({ error: "id invalide" })
       }
 

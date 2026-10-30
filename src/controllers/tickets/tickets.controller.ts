@@ -1,5 +1,6 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
+import { parseId } from "../../utils/validation.js"
 
 export function ticketsController(prisma: PrismaClient) {
   return {
@@ -11,10 +12,9 @@ export function ticketsController(prisma: PrismaClient) {
 
     // Réponse a une méthode GET avec id en params
     getById: async (req: Request, res: Response) => {
-      const id = Number(req.params.id)
-
       // Vérification type id
-      if (!Number.isSafeInteger(id) || id < 1) {
+      const id = parseId(req.params.id)
+      if (id === null) {
         return res.status(400).json({ error: "id invalide" })
       }
 
@@ -53,10 +53,9 @@ export function ticketsController(prisma: PrismaClient) {
 
     // Réponse à méthode Patch
     updateStatus: async (req: Request, res: Response) => {
-      const id = Number(req.params.id)
-
       // Verification nombre entier
-      if (!Number.isSafeInteger(id) || id < 1) {
+      const id = parseId(req.params.id)
+      if (id === null) {
         return res.status(400).json({ error: "id invalide" })
       }
 

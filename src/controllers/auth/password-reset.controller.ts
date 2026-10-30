@@ -2,6 +2,7 @@ import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import { isActionTokenFormat, isValidNewPassword } from "../../utils/credentials.js"
 import { passwordResetService } from "../../services/auth/password-reset.service.js"
+import { isValidEmail, normalizeEmail } from "../../utils/validation.js"
 
 // Lecture des requêtes HTTP de réinitialisation ; la logique métier est dans passwordResetService
 export function passwordResetController(prisma: PrismaClient) {
@@ -12,10 +13,8 @@ export function passwordResetController(prisma: PrismaClient) {
       const startedAt = Date.now()
 
       // Valider l'email sans révéler si le compte existe.
-      const email = typeof req.body?.email === "string"
-        ? req.body.email.trim().toLowerCase()
-        : ""
-      if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      const email = normalizeEmail(req.body?.email)
+      if (!isValidEmail(email)) {
         return res.status(400).json({ error: "email invalide" })
       }
 

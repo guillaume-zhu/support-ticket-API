@@ -1,6 +1,7 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import { authService } from "../../services/auth/auth.service.js"
+import { normalizeEmail } from "../../utils/validation.js"
 
 // Lecture des requêtes HTTP d'authentification ; la logique métier est dans authService
 export function authController(prisma: PrismaClient) {
@@ -21,7 +22,7 @@ export function authController(prisma: PrismaClient) {
         return res.status(400).json({ error: "email et password requis" })
       }
 
-      const tokens = await service.login(email.trim().toLowerCase(), password)
+      const tokens = await service.login(normalizeEmail(email), password)
       if (!tokens) {
         return res.status(401).json({ error: "Identifiants invalides" })
       }
