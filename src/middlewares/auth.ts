@@ -1,19 +1,19 @@
 import type { RequestHandler } from "express"
 import { jwtVerify } from "jose"
 import type { PrismaClient, Role } from "../generated/prisma/client.js"
+import {
+  ACCESS_TOKEN_LIFETIME,
+  JWT_AUDIENCE,
+  JWT_ISSUER,
+  jwtKey,
+  parseSubjectId,
+} from "../utils/jwt.js"
 
 export type AuthenticatedUser = { id: number; role: Role }
 
 export function authenticate(prisma: PrismaClient): RequestHandler {
   // Préparer la clé qui permet de vérifier les access tokens.
-  const encoded = process.env.ACCESS_TOKEN_SECRET
-  if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
-    throw new Error("ACCESS_TOKEN_SECRET doit contenir 32 octets aléatoires en base64url")
-  }
-  const accessKey = Buffer.from(encoded, "base64url")
-  if (accessKey.length !== 32) {
-    throw new Error("ACCESS_TOKEN_SECRET doit contenir 32 octets aléatoires en base64url")
-  }
+  const accessKey = jwtKey("ACCESS_TOKEN_SECRET")
 
   return async (req, res, next) => {
     // Lire le token envoyé et vérifier sa signature, sa durée et son usage.
@@ -24,10 +24,10 @@ export function authenticate(prisma: PrismaClient): RequestHandler {
 
     const claims = await jwtVerify(token, accessKey, {
       algorithms: ["HS256"],
-      issuer: "support-ticket-api",
-      audience: "support-ticket-api",
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
       requiredClaims: ["sub", "jti", "exp"],
-      maxTokenAge: "15m",
+      maxTokenAge: ACCESS_TOKEN_LIFETIME,
     })
       .then(({ payload }) => payload)
       .catch(() => null)
@@ -41,8 +41,8 @@ export function authenticate(prisma: PrismaClient): RequestHandler {
       return res.status(401).json({ error: "Authentification requise" })
     }
 
-    const userId = Number(claims.sub)
-    if (!Number.isSafeInteger(userId) || userId < 1 || String(userId) !== claims.sub) {
+    const userId = parseSubjectId(claims.sub)
+    if (userId === null) {
       return res.status(401).json({ error: "Authentification requise" })
     }
 

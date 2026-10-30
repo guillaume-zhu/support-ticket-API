@@ -2,9 +2,14 @@ import * as argon2 from "argon2"
 import { randomUUID } from "node:crypto"
 import { jwtVerify, SignJWT } from "jose"
 import type { PrismaClient } from "../../generated/prisma/client.js"
+import {
+  ACCESS_TOKEN_LIFETIME,
+  JWT_AUDIENCE,
+  JWT_ISSUER,
+  jwtKey,
+  parseSubjectId,
+} from "../../utils/jwt.js"
 
-const ISSUER = "support-ticket-api"
-const AUDIENCE = "support-ticket-api"
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000
 
 // Hash Argon2id factice, généré une fois avec les paramètres des vrais mots de passe.
@@ -12,19 +17,6 @@ const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000
 // se connecter, sans garantir des durées identiques.
 const DUMMY_PASSWORD_HASH =
   "$argon2id$v=19$m=19456,p=1,t=2$sYphwXbWSU2kxHvOecKiFg$Ox2/t8ErXCUU0cb6xWcDNBxjOeO+MvzNs72+5znK7Xc"
-
-// Récupérer secret JWT
-function jwtKey(name: string): Buffer {
-  const encoded = process.env[name]
-  if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
-    throw new Error(`${name} doit contenir 32 octets aléatoires en base64url`)
-  }
-  const key = Buffer.from(encoded, "base64url")
-  if (key.length !== 32) {
-    throw new Error(`${name} doit contenir 32 octets aléatoires en base64url`)
-  }
-  return key
-}
 
 export type AuthTokens = { accessToken: string; refreshToken: string }
 
@@ -42,17 +34,17 @@ export function authService(prisma: PrismaClient) {
       .setProtectedHeader({ alg: "HS256" })
       .setSubject(String(userId))
       .setJti(sessionId)
-      .setIssuer(ISSUER)
-      .setAudience(AUDIENCE)
+      .setIssuer(JWT_ISSUER)
+      .setAudience(JWT_AUDIENCE)
       .setIssuedAt()
-      .setExpirationTime("15m")
+      .setExpirationTime(ACCESS_TOKEN_LIFETIME)
       .sign(accessKey)
     const refreshToken = await new SignJWT({ token_use: "refresh" })
       .setProtectedHeader({ alg: "HS256" })
       .setSubject(String(userId))
       .setJti(sessionId)
-      .setIssuer(ISSUER)
-      .setAudience(AUDIENCE)
+      .setIssuer(JWT_ISSUER)
+      .setAudience(JWT_AUDIENCE)
       .setIssuedAt()
       .setExpirationTime(expiresAt)
       .sign(refreshKey)
@@ -64,8 +56,8 @@ export function authService(prisma: PrismaClient) {
   const verifyRefreshToken = async (token: string) => {
     const claims = await jwtVerify(token, refreshKey, {
       algorithms: ["HS256"],
-      issuer: ISSUER,
-      audience: AUDIENCE,
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
       requiredClaims: ["sub", "jti", "exp"],
     })
       .then(({ payload }) => payload)
@@ -80,8 +72,8 @@ export function authService(prisma: PrismaClient) {
       return null
     }
 
-    const userId = Number(claims.sub)
-    if (!Number.isSafeInteger(userId) || userId < 1 || String(userId) !== claims.sub) {
+    const userId = parseSubjectId(claims.sub)
+    if (userId === null) {
       return null
     }
 
