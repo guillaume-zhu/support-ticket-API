@@ -7,6 +7,11 @@ import type { PrismaClient } from "../generated/prisma/client.js"
 const ISSUER = "support-ticket-api"
 const AUDIENCE = "support-ticket-api"
 
+// Hash Argon2id factice, généré une fois avec les paramètres des vrais mots de passe.
+// Il sert à garder le même temps de réponse quand le compte n'existe pas ou ne peut pas se connecter.
+const DUMMY_PASSWORD_HASH =
+  "$argon2id$v=19$m=19456,p=1,t=2$sYphwXbWSU2kxHvOecKiFg$Ox2/t8ErXCUU0cb6xWcDNBxjOeO+MvzNs72+5znK7Xc"
+
 // Récupérer secret JWT
 function jwtKey(name: string): Buffer {
   const encoded = process.env[name]
@@ -100,6 +105,7 @@ export function authController(prisma: PrismaClient) {
         where: { email: email.trim().toLowerCase() },
       })
       if (!user || user.status !== "ACTIVE" || !user.passwordHash) {
+        await argon2.verify(DUMMY_PASSWORD_HASH, password)
         return res.status(401).json({ error: "Identifiants invalides" })
       }
       if (!(await argon2.verify(user.passwordHash, password))) {
