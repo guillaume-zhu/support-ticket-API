@@ -2,7 +2,7 @@ import * as argon2 from "argon2"
 import { randomUUID } from "node:crypto"
 import type { Request, Response } from "express"
 import { jwtVerify, SignJWT } from "jose"
-import type { PrismaClient } from "../generated/prisma/client.js"
+import type { PrismaClient } from "../../generated/prisma/client.js"
 
 const ISSUER = "support-ticket-api"
 const AUDIENCE = "support-ticket-api"

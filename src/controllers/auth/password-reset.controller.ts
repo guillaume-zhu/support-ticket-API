@@ -1,7 +1,7 @@
 import * as argon2 from "argon2"
 import { createHash, randomBytes } from "node:crypto"
 import type { Request, Response } from "express"
-import { Prisma, type PrismaClient } from "../generated/prisma/client.js"
+import { Prisma, type PrismaClient } from "../../generated/prisma/client.js"
 
 // Réinitialisation du mot de passe par code envoyé par email
 export function passwordResetController(prisma: PrismaClient) {

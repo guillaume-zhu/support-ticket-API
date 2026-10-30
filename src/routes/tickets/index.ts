@@ -1,6 +1,6 @@
 import { Router } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
-import { ticketsController } from "../../controllers/tickets.controller.js"
+import { ticketsController } from "../../controllers/tickets/tickets.controller.js"
 import { authenticate, requireRoles } from "../../middlewares/auth.js"
 
 export function ticketsRoutes(prisma: PrismaClient) {

@@ -1,8 +1,8 @@
 import { Router } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
-import { authController } from "../../controllers/auth.controller.js"
-import { invitationsController } from "../../controllers/invitations.controller.js"
-import { passwordResetController } from "../../controllers/password-reset.controller.js"
+import { authController } from "../../controllers/auth/auth.controller.js"
+import { invitationsController } from "../../controllers/auth/invitations.controller.js"
+import { passwordResetController } from "../../controllers/auth/password-reset.controller.js"
 
 export function authRoutes(prisma: PrismaClient) {
   const router = Router()

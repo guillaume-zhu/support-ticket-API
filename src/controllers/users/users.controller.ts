@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto"
 import type { Request, Response } from "express"
-import { Prisma, type PrismaClient } from "../generated/prisma/client.js"
+import { Prisma, type PrismaClient } from "../../generated/prisma/client.js"
 
 export function usersController(prisma: PrismaClient) {
   return {

@@ -1,7 +1,7 @@
 import * as argon2 from "argon2"
 import { createHash } from "node:crypto"
 import type { Request, Response } from "express"
-import type { PrismaClient } from "../generated/prisma/client.js"
+import type { PrismaClient } from "../../generated/prisma/client.js"
 
 // Activation d'un compte invité à partir du code reçu par email
 export function invitationsController(prisma: PrismaClient) {

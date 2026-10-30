@@ -1,5 +1,5 @@
 import type { Request, Response } from "express"
-import type { PrismaClient } from "../generated/prisma/client.js"
+import type { PrismaClient } from "../../generated/prisma/client.js"
 
 export function ticketsController(prisma: PrismaClient) {
   return {
