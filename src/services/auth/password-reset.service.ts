@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client.js"
-import { generateActionToken, hashActionToken, hashPassword } from "../credentials.js"
+import { generateActionToken, hashActionToken, hashPassword } from "../../utils/credentials.js"
 import { isEmailConfigured, sendEmail } from "../shared/email.service.js"
 
 // Réinitialisation du mot de passe par code envoyé par email

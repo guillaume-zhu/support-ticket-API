@@ -1,6 +1,6 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
-import { isActionTokenFormat, isValidNewPassword } from "../../services/credentials.js"
+import { isActionTokenFormat, isValidNewPassword } from "../../utils/credentials.js"
 import { passwordResetService } from "../../services/auth/password-reset.service.js"
 
 // Lecture des requêtes HTTP de réinitialisation ; la logique métier est dans passwordResetService

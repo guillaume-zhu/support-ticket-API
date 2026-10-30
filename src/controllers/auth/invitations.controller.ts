@@ -1,6 +1,6 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
-import { isActionTokenFormat, isValidNewPassword } from "../../services/credentials.js"
+import { isActionTokenFormat, isValidNewPassword } from "../../utils/credentials.js"
 import { invitationsService } from "../../services/auth/invitations.service.js"
 
 // Lecture des requêtes HTTP d'activation ; la logique métier est dans invitationsService

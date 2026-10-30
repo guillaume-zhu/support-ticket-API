@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client.js"
-import { generateActionToken } from "../credentials.js"
+import { generateActionToken } from "../../utils/credentials.js"
 import { isEmailConfigured, sendEmail } from "../shared/email.service.js"
 
 // Gestion des comptes : création, invitation, désactivation et réactivation

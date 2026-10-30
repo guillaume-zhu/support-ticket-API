@@ -1,3 +1,5 @@
+// Fonctions techniques sur les mots de passe et les codes à usage unique.
+// Ce dossier ne dépend ni de Prisma, ni d'Express, ni des services, et ne contient aucune règle métier.
 import * as argon2 from "argon2"
 import { createHash, randomBytes } from "node:crypto"
 

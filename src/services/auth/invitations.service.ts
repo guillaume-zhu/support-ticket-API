@@ -1,5 +1,5 @@
 import type { PrismaClient } from "../../generated/prisma/client.js"
-import { hashActionToken, hashPassword } from "../credentials.js"
+import { hashActionToken, hashPassword } from "../../utils/credentials.js"
 
 // Activation d'un compte invité à partir du code reçu par email
 export function invitationsService(prisma: PrismaClient) {
