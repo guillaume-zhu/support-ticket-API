@@ -1,13 +1,14 @@
 import "dotenv/config"
-import * as argon2 from "argon2"
 import password from "@inquirer/password"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { PrismaClient } from "../src/generated/prisma/client.js"
+import { hashPassword, isValidNewPassword } from "../src/utils/credentials.js"
+import { isValidEmail, normalizeEmail } from "../src/utils/validation.js"
 
 async function main() {
-  const email = process.argv[2]?.trim().toLowerCase()
+  const email = normalizeEmail(process.argv[2])
 
-  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (!isValidEmail(email)) {
     console.error("Usage : npm run bootstrap:super-admin -- admin@example.com")
     process.exitCode = 1
     return
@@ -42,9 +43,7 @@ async function main() {
       mask: "*",
       toggleMask: false,
       validate: (value) =>
-        [...value].length >= 15 && Buffer.byteLength(value, "utf8") <= 1024
-          ? true
-          : "Utilise entre 15 caractères et 1024 octets.",
+        isValidNewPassword(value) ? true : "Utilise entre 15 caractères et 1024 octets.",
     })
     const confirmation = await password({
       message: "Confirmer le mot de passe",
@@ -58,12 +57,7 @@ async function main() {
       return
     }
 
-    const passwordHash = await argon2.hash(first, {
-      type: argon2.argon2id,
-      memoryCost: 19456,
-      timeCost: 2,
-      parallelism: 1,
-    })
+    const passwordHash = await hashPassword(first)
 
     await prisma.user.create({
       data: { email, passwordHash, role: "SUPER_ADMIN", status: "ACTIVE" },
