@@ -39,21 +39,24 @@ export function passwordResetController(prisma: PrismaClient) {
         return respond()
       }
 
+      // Verrouiller l'utilisateur pour traiter ses demandes simultanées une par une.
       // Limiter les envois répétés, puis remplacer l'ancien code par un nouveau.
-      const recent = await prisma.actionToken.findFirst({
-        where: {
-          userId: user.id,
-          purpose: "PASSWORD_RESET",
-          expiresAt: { gt: new Date(Date.now() + 55 * 60 * 1000) },
-        },
-      })
-      if (recent) {
-        return respond()
-      }
+      const created = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${user.id})`
 
-      const token = randomBytes(32).toString("base64url")
-      const tokenHash = createHash("sha256").update(token).digest("hex")
-      await prisma.$transaction(async (tx) => {
+        const recent = await tx.actionToken.findFirst({
+          where: {
+            userId: user.id,
+            purpose: "PASSWORD_RESET",
+            expiresAt: { gt: new Date(Date.now() + 55 * 60 * 1000) },
+          },
+        })
+        if (recent) {
+          return null
+        }
+
+        const token = randomBytes(32).toString("base64url")
+        const tokenHash = createHash("sha256").update(token).digest("hex")
         await tx.actionToken.deleteMany({
           where: { userId: user.id, purpose: "PASSWORD_RESET" },
         })
@@ -65,7 +68,12 @@ export function passwordResetController(prisma: PrismaClient) {
             expiresAt: new Date(Date.now() + 60 * 60 * 1000),
           },
         })
+        return { token, tokenHash }
       })
+      if (!created) {
+        return respond()
+      }
+      const { token, tokenHash } = created
 
       // Envoyer le code après la transaction, sans le mettre dans la réponse ou les logs.
       void fetch("https://api.resend.com/emails", {
