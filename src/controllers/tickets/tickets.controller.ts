@@ -1,13 +1,17 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
+import type { AuthenticatedUser } from "../../middlewares/auth.js"
+import { ticketsService } from "../../services/tickets/tickets.service.js"
 import { parseId } from "../../utils/validation.js"
 
 export function ticketsController(prisma: PrismaClient) {
+  const service = ticketsService(prisma)
+
   return {
     // Réponse a une réponse GET
     list: async (req: Request, res: Response) => {
-      const tickets = await prisma.ticket.findMany({ orderBy: { id: "asc" } })
-      res.json(tickets)
+      const user = res.locals.authUser as AuthenticatedUser
+      res.json(await service.listVisible(user))
     },
 
     // Réponse a une méthode GET avec id en params
@@ -18,7 +22,9 @@ export function ticketsController(prisma: PrismaClient) {
         return res.status(400).json({ error: "id invalide" })
       }
 
-      const ticket = await prisma.ticket.findUnique({ where: { id } })
+      // 404 aussi pour un ticket d'autrui : on ne révèle pas son existence.
+      const user = res.locals.authUser as AuthenticatedUser
+      const ticket = await service.findVisibleById(id, user)
 
       if (!ticket) {
         return res.status(404).json({ error: "ticket introuvable" })
@@ -41,12 +47,11 @@ export function ticketsController(prisma: PrismaClient) {
         return res.status(400).json({ error: "title et description sont requis" })
       }
 
-      const ticket = await prisma.ticket.create({
-        data: {
-          title: title.trim(),
-          description: description.trim(),
-        },
-      })
+      const user = res.locals.authUser as AuthenticatedUser
+      const ticket = await service.create(
+        { title: title.trim(), description: description.trim() },
+        user,
+      )
 
       return res.status(201).json(ticket)
     },

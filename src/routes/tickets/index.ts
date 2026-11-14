@@ -10,10 +10,10 @@ export function ticketsRoutes(prisma: PrismaClient) {
   const staff = requireRoles("SUPER_ADMIN", "ADMIN", "AGENT")
   const allRoles = requireRoles("SUPER_ADMIN", "ADMIN", "AGENT", "USER")
 
-  // Réserver la lecture et le changement de statut aux rôles internes.
-  // Permettre la création de tickets à tous les comptes connectés.
-  router.get("/", authenticated, staff, tickets.list)
-  router.get("/:id", authenticated, staff, tickets.getById)
+  // Tous les comptes connectés créent et lisent des tickets (filtrés par propriété dans le service).
+  // Seul le personnel change le statut.
+  router.get("/", authenticated, allRoles, tickets.list)
+  router.get("/:id", authenticated, allRoles, tickets.getById)
   router.post("/", authenticated, allRoles, tickets.create)
   router.patch("/:id/status", authenticated, staff, tickets.updateStatus)
 

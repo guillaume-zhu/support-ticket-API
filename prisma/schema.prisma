@@ -19,6 +19,13 @@ model Ticket {
   title       String
   description String
   status      TicketStatus @default(OPEN)
+  // Nullable : les anciens tickets n'ont pas d'auteur connu.
+  createdById Int?
+  createdBy   User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([createdById])
 }
 
 enum Role {
@@ -47,6 +54,7 @@ model User {
   status       UserStatus    @default(INVITED)
   sessions     Session[]
   actionTokens ActionToken[]
+  tickets      Ticket[]
 }
 
 model Session {
