@@ -35,6 +35,37 @@ npm run test:unit
 npm test
 ```
 
+## Intégration continue
+
+Le workflow `.github/workflows/ci.yml` s'exécute sur GitHub à chaque `git push`
+(toutes les branches), à chaque pull request et à la demande (onglet Actions,
+« Run workflow »). Sur une machine Ubuntu vierge, avec Node 24 et un PostgreSQL 17
+jetable, il enchaîne :
+
+1. `npm ci` : installation exacte du `package-lock.json` ;
+2. `npx prisma generate` : client Prisma ;
+3. `npx tsc --noEmit` : vérification TypeScript ;
+4. `npm run build` : compilation ;
+5. `npm test` : migrations sur la base jetable, puis tests unitaires et HTTP.
+
+Une coche verte ou une croix rouge s'affiche à côté du commit. Le workflow
+n'a que le droit `contents: read`, n'utilise aucun secret du dépôt et ne déploie
+rien. Les tests simulent toujours Resend.
+
+La base du workflow porte les noms attendus par `scripts/test-database.ts`
+(rôle `support_ticket_test_runner`, base `support_ticket_test`, hôte `127.0.0.1`).
+Son mot de passe est écrit dans le fichier : ce n'est pas un secret, la base
+n'existe que le temps du contrôle. Une première étape refuse toute URL
+différente. `DATABASE_URL` est définie aussi pour `prisma generate`, car
+`prisma.config.ts` la lit.
+
+Les deux actions utilisées (`actions/checkout`, `actions/setup-node`) sont
+officielles et épinglées sur le commit exact d'une version stable ; la version
+est notée en commentaire. Pour les mettre à jour, remplacer le commit et le
+commentaire ensemble.
+
+`npm audit` n'est volontairement pas bloquant dans la CI.
+
 ## Lancer le projet
 
 Dans le dossier du projet :

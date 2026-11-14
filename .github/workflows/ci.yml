@@ -1,0 +1,79 @@
+# Intégration continue : à chaque push, sur une machine vierge, vérifier TypeScript, compiler et lancer tous les tests.
+name: CI
+
+on:
+  push: # toutes les branches
+  pull_request:
+  workflow_dispatch: # lancement manuel depuis l'onglet Actions
+
+# Aucun droit d'écriture : le workflow ne fait que lire le code.
+permissions:
+  contents: read
+
+# Un nouveau commit sur la même branche (ou la même pull request) remplace le contrôle précédent encore en cours.
+# Le groupe inclut le type d'événement et la référence : des contrôles distincts ne s'annulent jamais entre eux.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: TypeScript, build et tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    # Même variables des deux côtés : prisma.config.ts lit DATABASE_URL (même pour `prisma generate`)
+    # et scripts/test-database.ts n'accepte que 127.0.0.1, la base support_ticket_test et son rôle dédié.
+    # Le mot de passe n'est pas un secret : la base n'existe que le temps du contrôle et n'est joignable de nulle part.
+    env:
+      DATABASE_URL: postgresql://support_ticket_test_runner:ci-throwaway-password@127.0.0.1:5432/support_ticket_test
+      DATABASE_TEST_URL: postgresql://support_ticket_test_runner:ci-throwaway-password@127.0.0.1:5432/support_ticket_test
+
+    # Base PostgreSQL jetable, créée avec les noms attendus par notre garde de sécurité.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: support_ticket_test_runner
+          POSTGRES_PASSWORD: ci-throwaway-password
+          POSTGRES_DB: support_ticket_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U support_ticket_test_runner -d support_ticket_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      # Actions officielles, épinglées sur le commit exact d'une version stable (le commentaire indique la version).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # Garde-fou : les deux URL doivent viser uniquement la base jetable ci-dessus.
+      - name: Vérifier la cible de la base de données
+        run: |
+          expected="postgresql://support_ticket_test_runner:ci-throwaway-password@127.0.0.1:5432/support_ticket_test"
+          [ "$DATABASE_URL" = "$expected" ] && [ "$DATABASE_TEST_URL" = "$expected" ] || { echo "URL de base inattendue"; exit 1; }
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Générer le client Prisma
+        run: npx prisma generate
+
+      - name: Vérifier TypeScript
+        run: npx tsc --noEmit
+
+      - name: Compiler
+        run: npm run build
+
+      # Applique les migrations sur la base jetable, puis lance les tests unitaires et HTTP.
+      - name: Lancer les tests
+        run: npm test
