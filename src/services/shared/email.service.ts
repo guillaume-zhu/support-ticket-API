@@ -8,6 +8,10 @@ export function isEmailConfigured() {
 // Envoyer un email ; renvoie true si Resend l'a accepté, false sinon (sans jamais lever d'exception).
 // L'appelant décide s'il attend le résultat ou non.
 export async function sendEmail(message: { to: string; subject: string; text: string }) {
+  // Une suite de tests ne doit jamais contacter Resend, même si le mock est omis.
+  if (process.env.NODE_ENV === "test") {
+    return false
+  }
   const apiKey = process.env.RESEND_API_KEY
   const from = process.env.RESEND_FROM_EMAIL
   if (!apiKey || !from) {

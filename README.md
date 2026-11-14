@@ -9,6 +9,32 @@ Auteur : Guillaume Zhu - WEB2 - HETIC
 - Node.js 24
 - PostgreSQL 17 installé avec Homebrew
 
+## Tests automatisés
+
+`npm run test:unit` lance les tests des fonctions réutilisables sans PostgreSQL.
+`npm test` applique les migrations puis lance les tests unitaires et HTTP sur une
+base **distincte**. Les tests HTTP purgent leurs données avant chaque scénario.
+
+Créer une fois un rôle et une base de test dans PostgreSQL (avec un compte
+administrateur PostgreSQL) :
+
+```sql
+CREATE ROLE support_ticket_test_runner LOGIN PASSWORD 'choisir-un-mot-de-passe';
+CREATE DATABASE support_ticket_test OWNER support_ticket_test_runner;
+```
+
+Copier `.env.test.example` vers `.env.test`, puis renseigner le mot de passe et le
+port PostgreSQL. Ce fichier est ignoré par Git. La commande refuse de démarrer
+si l'URL ne cible pas la base locale `support_ticket_test` avec le rôle
+`support_ticket_test_runner`, ou si elle correspond à l'URL de développement.
+Elle remplace les secrets JWT par des valeurs temporaires et désactive tout envoi
+Resend. On peut aussi fournir `DATABASE_TEST_URL` directement dans l'environnement.
+
+```bash
+npm run test:unit
+npm test
+```
+
 ## Lancer le projet
 
 Dans le dossier du projet :
