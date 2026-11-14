@@ -80,26 +80,35 @@ function parsePositiveInt(value: string | undefined, max: number) {
   return number >= 1 && number <= max ? number : null
 }
 
-// Valider les paramètres de GET /tickets (valeurs par défaut incluses) ; renvoie une erreur lisible si invalide.
-// Un paramètre inconnu, répété ou imbriqué (a[b]=1) est refusé.
-export function parseTicketListQuery(
+// Lire les paramètres d'une query string : refuse les paramètres inconnus, répétés (?a=1&a=2) ou imbriqués (a[b]=1).
+function readQueryParams(
   query: Record<string, unknown>,
-): { ok: true; value: TicketListOptions } | { ok: false; error: string } {
-  // Refuser les paramètres inconnus : une faute de frappe (ex. "sort") ne doit pas être ignorée en silence.
+  allowedNames: readonly string[],
+): { ok: true; raw: Record<string, string | undefined> } | { ok: false; error: string } {
+  // Une faute de frappe (ex. "sort") ne doit pas être ignorée en silence.
   for (const name of Object.keys(query)) {
-    if (!TICKET_LIST_PARAMS.includes(name)) {
+    if (!allowedNames.includes(name)) {
       return { ok: false, error: `paramètre inconnu : ${name.slice(0, 50)}` }
     }
   }
-
   const raw: Record<string, string | undefined> = {}
-  for (const name of TICKET_LIST_PARAMS) {
+  for (const name of allowedNames) {
     const value = query[name]
     if (value !== undefined && typeof value !== "string") {
       return { ok: false, error: `paramètre ${name} invalide` }
     }
     raw[name] = value
   }
+  return { ok: true, raw }
+}
+
+// Valider les paramètres de GET /tickets (valeurs par défaut incluses) ; renvoie une erreur lisible si invalide.
+export function parseTicketListQuery(
+  query: Record<string, unknown>,
+): { ok: true; value: TicketListOptions } | { ok: false; error: string } {
+  const params = readQueryParams(query, TICKET_LIST_PARAMS)
+  if (!params.ok) return params
+  const raw = params.raw
 
   const page = parsePositiveInt(raw.page, MAX_PAGE)
   if (page === null) return { ok: false, error: "page invalide" }
@@ -151,4 +160,52 @@ export function parseTicketListQuery(
 // Neutraliser \, % et _ pour une recherche LIKE littérale (Prisma ne les échappe pas dans `contains`).
 export function escapeLikePattern(text: string) {
   return text.replace(/[\\%_]/g, "\\$&")
+}
+
+export const AUDIT_ACTIONS = [
+  "USER_CREATED",
+  "USER_INVITATION_CREATED",
+  "USER_INVITATION_SEND_FAILED",
+  "USER_DISABLED",
+  "USER_ENABLED",
+  "INVITATION_ACCEPTED",
+  "PASSWORD_RESET_COMPLETED",
+  "SUPER_ADMIN_BOOTSTRAPPED",
+] as const
+const AUDIT_LIST_PARAMS = ["page", "limit", "action", "actorId", "targetUserId"]
+
+export type AuditLogListOptions = {
+  page: number
+  limit: number
+  action?: (typeof AUDIT_ACTIONS)[number] | undefined
+  actorId?: number | undefined
+  targetUserId?: number | undefined
+}
+
+// Valider les paramètres de GET /audit-logs (mêmes règles de pagination que les tickets).
+export function parseAuditLogQuery(
+  query: Record<string, unknown>,
+): { ok: true; value: AuditLogListOptions } | { ok: false; error: string } {
+  const params = readQueryParams(query, AUDIT_LIST_PARAMS)
+  if (!params.ok) return params
+  const raw = params.raw
+
+  const page = parsePositiveInt(raw.page, MAX_PAGE)
+  if (page === null) return { ok: false, error: "page invalide" }
+  const limit = parsePositiveInt(raw.limit, MAX_PAGE_SIZE)
+  if (limit === null) return { ok: false, error: `limit invalide (1 à ${MAX_PAGE_SIZE})` }
+
+  const action = raw.action
+  if (action !== undefined && !(AUDIT_ACTIONS as readonly string[]).includes(action)) {
+    return { ok: false, error: "action invalide" }
+  }
+  const actorId = raw.actorId === undefined ? undefined : parseId(raw.actorId)
+  if (actorId === null) return { ok: false, error: "actorId invalide" }
+  const targetUserId = raw.targetUserId === undefined ? undefined : parseId(raw.targetUserId)
+  if (targetUserId === null) return { ok: false, error: "targetUserId invalide" }
+
+  return {
+    ok: true,
+    value: { page: page ?? 1, limit: limit ?? 20, action: action as AuditLogListOptions["action"], actorId, targetUserId },
+  }
 }

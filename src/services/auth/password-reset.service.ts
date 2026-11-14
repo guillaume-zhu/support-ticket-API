@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client.js"
 import { generateActionToken, hashActionToken, hashPassword } from "../../utils/credentials.js"
+import { recordAudit } from "../shared/audit.service.js"
 import { isEmailConfigured, sendEmail } from "../shared/email.service.js"
 
 // Réinitialisation du mot de passe par code envoyé par email
@@ -127,9 +128,16 @@ export function passwordResetService(prisma: PrismaClient) {
           await tx.actionToken.deleteMany({
             where: { userId: reset.userId, purpose: "PASSWORD_RESET" },
           })
-          await tx.session.updateMany({
+          const revoked = await tx.session.updateMany({
             where: { userId: reset.userId, revokedAt: null },
             data: { revokedAt: new Date() },
+          })
+          // L'acteur est le compte retrouvé grâce au code, jamais une donnée du body.
+          await recordAudit(tx, {
+            action: "PASSWORD_RESET_COMPLETED",
+            actor: { id: reset.userId, role: reset.user.role },
+            targetUserId: reset.userId,
+            metadata: { revokedSessions: revoked.count },
           })
           return true
         })

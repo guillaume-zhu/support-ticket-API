@@ -124,6 +124,7 @@ Les access tokens sont également liés à leur session et refusés après sa r�
 | POST    | `/auth/reset-password` | Définir un nouveau mot de passe |
 | PATCH   | `/users/:id/disable` | Désactiver un compte |
 | PATCH   | `/users/:id/enable` | Réactiver un compte |
+| GET     | `/audit-logs` | Consulter l'historique des actions sensibles (Super Admin) |
 
 Pour `POST /tickets`, envoyer un corps JSON :
 
@@ -201,6 +202,47 @@ Les caractères de contrôle, dont l'octet NUL que PostgreSQL refuse dans un
 texte, sont interdits. Un test parcourt `src/` et `scripts/` pour détecter les
 usages évidents de SQL brut dangereux (`*Unsafe`, `Prisma.raw`) ; c'est un
 simple garde-fou textuel, pas une garantie exhaustive.
+
+## Journal d'audit
+
+Chaque action sensible réussie ajoute une ligne à la table `AuditLog` : qui
+(`actorId`, `actorRole`), quoi (`action`), sur quel compte (`targetUserId`),
+quand (`createdAt`) et quelques `metadata` non sensibles. Les lignes ne sont
+jamais modifiées ni supprimées par l'application, et supprimer un compte ne les
+supprime pas (les liens passent à `NULL`).
+
+| Action                        | Déclencheur                                              | Acteur            |
+| ----------------------------- | -------------------------------------------------------- | ----------------- |
+| `USER_CREATED`                | `POST /users` (metadata : rôle)                          | Super Admin       |
+| `USER_INVITATION_CREATED`     | code d'invitation créé (`POST /users/:id/invitation`)    | Super Admin       |
+| `USER_INVITATION_SEND_FAILED` | Resend a refusé l'email (réponse `502`)                  | Super Admin       |
+| `USER_DISABLED`               | désactivation (états avant/après, sessions révoquées)    | Super Admin       |
+| `USER_ENABLED`                | réactivation (états avant/après)                         | Super Admin       |
+| `INVITATION_ACCEPTED`         | compte activé avec son code                              | le compte lui-même |
+| `PASSWORD_RESET_COMPLETED`    | mot de passe changé avec un code (sessions révoquées)    | le compte lui-même |
+| `SUPER_ADMIN_BOOTSTRAPPED`    | script `bootstrap:super-admin`                           | aucun (CLI)       |
+
+Pour les deux actions « le compte lui-même », l'acteur est le compte retrouvé
+grâce au code, jamais une donnée du body. Ne sont **pas** tracés : les
+connexions, les demandes de réinitialisation, les changements de statut de
+ticket et les actions refusées (`401`, `403`, `404`, `409`).
+
+L'audit est écrit dans la **même transaction** que l'action : si l'écriture de
+l'audit échoue, l'action est annulée (`500`). Une invitation suit trois temps :
+code et audit créés en transaction, email envoyé ensuite (jamais dans une
+transaction), puis `USER_INVITATION_SEND_FAILED` si Resend refuse. L'absence de
+cet événement après `USER_INVITATION_CREATED` signifie que l'email a été accepté.
+Cette dernière écriture n'est pas atomique avec l'envoi, car un email ne
+s'annule pas : si elle échoue, la réponse `502` est conservée.
+
+Aucun mot de passe, JWT, code temporaire, hash ni email n'est stocké dans le
+registre. `GET /audit-logs` (Super Admin) est paginé comme `GET /tickets`
+(`page`, `limit`) et se filtre avec `action`, `actorId` et `targetUserId` ;
+paramètre invalide ou inconnu : `400`.
+
+Limites : le registre n'est protégé que par l'application (rien n'empêche une
+personne ayant accès à PostgreSQL de le modifier) et il n'a pas de politique de
+conservation.
 
 ## Limitation de débit
 

@@ -20,6 +20,7 @@ beforeAll(async () => {
   await prisma.$connect()
 })
 beforeEach(async () => {
+  await prisma.auditLog.deleteMany()
   await prisma.actionToken.deleteMany()
   await prisma.session.deleteMany()
   await prisma.ticket.deleteMany()

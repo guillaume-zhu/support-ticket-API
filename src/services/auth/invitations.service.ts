@@ -1,5 +1,6 @@
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import { hashActionToken, hashPassword } from "../../utils/credentials.js"
+import { recordAudit } from "../shared/audit.service.js"
 
 // Activation d'un compte invité à partir du code reçu par email
 export function invitationsService(prisma: PrismaClient) {
@@ -54,6 +55,13 @@ export function invitationsService(prisma: PrismaClient) {
         }
         await tx.actionToken.deleteMany({
           where: { userId: invitation.userId, purpose: "INVITATION" },
+        })
+        // L'acteur est le compte retrouvé grâce au code, jamais une donnée du body.
+        await recordAudit(tx, {
+          action: "INVITATION_ACCEPTED",
+          actor: { id: invitation.userId, role: invitation.user.role },
+          targetUserId: invitation.userId,
+          metadata: { statusBefore: "INVITED", statusAfter: "ACTIVE" },
         })
         return true
       })

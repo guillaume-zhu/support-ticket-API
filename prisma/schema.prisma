@@ -55,6 +55,9 @@ model User {
   sessions     Session[]
   actionTokens ActionToken[]
   tickets      Ticket[]
+  // Historique : supprimer un compte ne supprime jamais ses lignes d'audit (SetNull sur AuditLog).
+  auditAsActor  AuditLog[] @relation("AuditActor")
+  auditAsTarget AuditLog[] @relation("AuditTarget")
 }
 
 model Session {
@@ -71,4 +74,36 @@ model ActionToken {
   user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   purpose   ActionTokenPurpose
   expiresAt DateTime
+}
+
+enum AuditAction {
+  USER_CREATED
+  USER_INVITATION_CREATED
+  USER_INVITATION_SEND_FAILED
+  USER_DISABLED
+  USER_ENABLED
+  INVITATION_ACCEPTED
+  PASSWORD_RESET_COMPLETED
+  SUPER_ADMIN_BOOTSTRAPPED
+}
+
+// Registre des actions sensibles : on y ajoute des lignes, on ne les modifie ni ne les supprime.
+model AuditLog {
+  id           Int         @id @default(autoincrement())
+  createdAt    DateTime    @default(now())
+  action       AuditAction
+  // Qui a agi (null pour le script CLI) et son rôle au moment de l'action.
+  actorId      Int?
+  actor        User?       @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorRole    Role?
+  // Compte concerné par l'action.
+  targetUserId Int?
+  targetUser   User?       @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+  // Informations utiles et non sensibles (jamais de mot de passe, token ou hash).
+  metadata     Json?
+
+  @@index([createdAt, id])
+  @@index([action])
+  @@index([actorId])
+  @@index([targetUserId])
 }

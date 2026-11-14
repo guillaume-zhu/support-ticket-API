@@ -3,6 +3,7 @@ import password from "@inquirer/password"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { PrismaClient } from "../src/generated/prisma/client.js"
 import { hashPassword, isValidNewPassword } from "../src/utils/credentials.js"
+import { recordAudit } from "../src/services/shared/audit.service.js"
 import { isValidEmail, normalizeEmail } from "../src/utils/validation.js"
 
 async function main() {
@@ -59,8 +60,17 @@ async function main() {
 
     const passwordHash = await hashPassword(first)
 
-    await prisma.user.create({
-      data: { email, passwordHash, role: "SUPER_ADMIN", status: "ACTIVE" },
+    // Créer le compte et tracer l'événement ensemble (acteur : personne, c'est une commande CLI).
+    await prisma.$transaction(async (tx) => {
+      const superAdmin = await tx.user.create({
+        data: { email, passwordHash, role: "SUPER_ADMIN", status: "ACTIVE" },
+      })
+      await recordAudit(tx, {
+        action: "SUPER_ADMIN_BOOTSTRAPPED",
+        actor: null,
+        targetUserId: superAdmin.id,
+        metadata: { source: "cli" },
+      })
     })
     console.log(`Super Admin créé : ${email}`)
   } catch {

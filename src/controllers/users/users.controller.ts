@@ -1,5 +1,6 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
+import type { AuthenticatedUser } from "../../middlewares/auth.js"
 import { usersService } from "../../services/users/users.service.js"
 import { isValidEmail, normalizeEmail, parseBody, parseId } from "../../utils/validation.js"
 
@@ -23,7 +24,7 @@ export function usersController(prisma: PrismaClient) {
         return res.status(400).json({ error: "role invalide" })
       }
 
-      const user = await service.create(normalizedEmail, role)
+      const user = await service.create(normalizedEmail, role, res.locals.authUser as AuthenticatedUser)
       if (user === "EMAIL_TAKEN") {
         return res.status(409).json({ error: "email déjà utilisé" })
       }
@@ -41,7 +42,7 @@ export function usersController(prisma: PrismaClient) {
         return res.status(400).json({ error: body.error })
       }
 
-      const result = await service.invite(id)
+      const result = await service.invite(id, res.locals.authUser as AuthenticatedUser)
       if (result === "NOT_FOUND") {
         return res.status(404).json({ error: "utilisateur introuvable" })
       }
@@ -68,7 +69,7 @@ export function usersController(prisma: PrismaClient) {
         return res.status(400).json({ error: body.error })
       }
 
-      const result = await service.disable(id)
+      const result = await service.disable(id, res.locals.authUser as AuthenticatedUser)
       if (result === "NOT_FOUND") {
         return res.status(404).json({ error: "utilisateur introuvable" })
       }
@@ -95,7 +96,7 @@ export function usersController(prisma: PrismaClient) {
         return res.status(400).json({ error: body.error })
       }
 
-      const result = await service.enable(id)
+      const result = await service.enable(id, res.locals.authUser as AuthenticatedUser)
       if (result === "NOT_FOUND") {
         return res.status(404).json({ error: "utilisateur introuvable" })
       }

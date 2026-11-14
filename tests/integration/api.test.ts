@@ -26,6 +26,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   // Purger seulement la base dédiée, après vérification stricte de son URL.
+  await prisma.auditLog.deleteMany()
   await prisma.actionToken.deleteMany()
   await prisma.session.deleteMany()
   await prisma.ticket.deleteMany()
