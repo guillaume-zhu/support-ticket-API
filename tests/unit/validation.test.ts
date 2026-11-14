@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { escapeLikePattern, isValidEmail, normalizeEmail, parseId, parseTicketListQuery } from "../../src/utils/validation.js"
 import { isActionTokenFormat, isValidNewPassword, generateActionToken, hashActionToken, hashPassword } from "../../src/utils/credentials.js"
 import { parseSubjectId } from "../../src/utils/jwt.js"
+import { parseTrustProxy } from "../../src/middlewares/rate-limit.js"
 import * as argon2 from "argon2"
 
 describe("validation des valeurs réutilisables", () => {
@@ -107,5 +108,19 @@ describe("validation de la query de GET /tickets", () => {
   it("échappe \\, % et _ pour une recherche LIKE littérale", () => {
     expect(escapeLikePattern("100%_a\\b")).toBe("100\\%\\_a\\\\b")
     expect(escapeLikePattern("simple")).toBe("simple")
+  })
+})
+
+describe("lecture de TRUST_PROXY", () => {
+  it("vaut 0 par défaut et accepte un petit entier", () => {
+    expect(parseTrustProxy(undefined)).toBe(0)
+    expect(parseTrustProxy("")).toBe(0)
+    expect(parseTrustProxy("1")).toBe(1)
+  })
+
+  it("refuse les valeurs ambiguës", () => {
+    for (const bad of ["true", "-1", "1.5", "loopback", "100"]) {
+      expect(() => parseTrustProxy(bad)).toThrow()
+    }
   })
 })

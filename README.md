@@ -176,6 +176,43 @@ La réponse `201` contient `id`, `email`, `role` et `status: "INVITED"`.
 Les rôles autorisés à la création sont `ADMIN`, `AGENT` et `USER`.
 Un email invalide ou un rôle inconnu donne `400` ; un email déjà utilisé donne `409`.
 
+## Limitation de débit
+
+Les requêtes sont limitées par fenêtre de 15 minutes. Au-delà, l'API répond
+`429` avec `{ "error": "trop de requêtes, réessayez plus tard" }` et les
+en-têtes `Retry-After` et `RateLimit-*`.
+
+| Cible                                              | Limite                         |
+| -------------------------------------------------- | ------------------------------ |
+| Toutes les routes                                  | 1 000 requêtes par IP          |
+| `POST /auth/login`                                 | 60 tentatives par IP ; 5 échecs d'authentification (401) par IP + email |
+| `POST /auth/request-password-reset`                | 5 par IP, 3 par adresse email  |
+| `POST /auth/reset-password`, `/auth/accept-invitation` | 10 par IP (quota partagé)  |
+| `POST /auth/refresh`                               | 30 par IP                      |
+
+Pour le login, seuls les échecs d'authentification (`401`) consomment le quota
+« IP + email » : les connexions réussies, les requêtes mal formées (`400`) et
+les erreurs serveur (`500`) ne comptent pas. Les emails des clés sont normalisés
+(minuscules, sans espaces) ; un email invalide ou trop long n'est jamais gardé
+en mémoire. Les IPv6 d'un même réseau (/56) partagent un compteur.
+
+**Compromis sur la réinitialisation.** Le quota de 3 demandes par adresse email
+protège la boîte mail d'une victime et le quota d'envoi contre une rafale
+depuis plusieurs IP. En contrepartie, un tiers peut empêcher cette adresse de
+demander un nouveau code pendant au plus 15 minutes. Ce blocage n'est jamais
+permanent (le compteur repart à zéro à la fin de la fenêtre), ne touche ni le
+login ni un code déjà reçu, et ne révèle pas si le compte existe (le quota
+s'applique à l'email saisi, qu'il existe ou non).
+
+Les valeurs se règlent dans `src/middlewares/rate-limit.ts`. Les compteurs sont
+gardés en mémoire : ils sont perdus au redémarrage et non partagés entre
+plusieurs instances.
+
+Derrière un proxy (hébergeur, reverse proxy), définir `TRUST_PROXY` avec le
+nombre de proxys de confiance (par exemple `1`). La valeur par défaut `0`
+ignore `X-Forwarded-For`, qui pourrait sinon être falsifié pour contourner les
+limites.
+
 ## Invitations
 
 Dans `.env`, renseigner `RESEND_API_KEY` et `RESEND_FROM_EMAIL` avec une adresse

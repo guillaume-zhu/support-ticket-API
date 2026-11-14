@@ -16,7 +16,7 @@ vi.mock("../../src/services/shared/email.service.js", () => ({
 
 const url = assertTestDatabase(process.env.DATABASE_TEST_URL)
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) })
-const app = createApp(prisma)
+const app = createApp(prisma, { rateLimits: false })
 
 beforeAll(async () => {
   await prisma.$connect()

@@ -18,7 +18,7 @@ if (process.env.DATABASE_URL !== url || process.env.NODE_ENV !== "test") {
 }
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) })
-const app = createApp(prisma)
+const app = createApp(prisma, { rateLimits: false })
 
 beforeAll(async () => {
   await prisma.$connect()
