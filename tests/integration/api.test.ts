@@ -81,8 +81,8 @@ describe("API HTTP", () => {
 
     const listed = await request(app).get("/tickets").set("Authorization", `Bearer ${token}`)
     expect(listed.status).toBe(200)
-    expect(listed.body).toHaveLength(1)
-    expect(listed.body[0].id).toBe(created.body.id)
+    expect(listed.body.data).toHaveLength(1)
+    expect(listed.body.data[0].id).toBe(created.body.id)
   })
 
   it("rejette les données de ticket invalides", async () => {
@@ -128,7 +128,7 @@ describe("Propriété des tickets", () => {
 
     const listed = await request(app).get("/tickets").set(bearer(alice.token))
     expect(listed.status).toBe(200)
-    expect(listed.body.map((t: { id: number }) => t.id)).toEqual([aliceTicket.body.id])
+    expect(listed.body.data.map((t: { id: number }) => t.id)).toEqual([aliceTicket.body.id])
   })
 
   it("un USER lit son ticket mais reçoit 404 sur celui d'un autre", async () => {
@@ -149,7 +149,7 @@ describe("Propriété des tickets", () => {
       const { token } = await createUser(role)
       const listed = await request(app).get("/tickets").set(bearer(token))
       expect(listed.status).toBe(200)
-      expect(listed.body.map((t: { id: number }) => t.id)).toEqual([aliceTicket.body.id, legacy.id])
+      expect(listed.body.data.map((t: { id: number }) => t.id)).toEqual([legacy.id, aliceTicket.body.id])
       expect((await request(app).get(`/tickets/${legacy.id}`).set(bearer(token))).status).toBe(200)
     }
   })
@@ -158,7 +158,7 @@ describe("Propriété des tickets", () => {
     const alice = await createUser("USER", "alice")
     const legacy = await prisma.ticket.create({ data: { title: "Ancien", description: "Sans auteur" } })
     expect((await request(app).get(`/tickets/${legacy.id}`).set(bearer(alice.token))).status).toBe(404)
-    expect((await request(app).get("/tickets").set(bearer(alice.token))).body).toEqual([])
+    expect((await request(app).get("/tickets").set(bearer(alice.token))).body.data).toEqual([])
   })
 })
 

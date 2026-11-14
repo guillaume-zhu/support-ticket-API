@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { isValidEmail, normalizeEmail, parseId } from "../../src/utils/validation.js"
+import { escapeLikePattern, isValidEmail, normalizeEmail, parseId, parseTicketListQuery } from "../../src/utils/validation.js"
 import { isActionTokenFormat, isValidNewPassword, generateActionToken, hashActionToken, hashPassword } from "../../src/utils/credentials.js"
 import { parseSubjectId } from "../../src/utils/jwt.js"
 import * as argon2 from "argon2"
@@ -48,5 +48,64 @@ describe("codes et mots de passe", () => {
     expect(hash.startsWith("$argon2id$")).toBe(true)
     expect(await argon2.verify(hash, "un-mot-de-passe-long")).toBe(true)
     expect(await argon2.verify(hash, "mauvais-mot-de-passe")).toBe(false)
+  })
+})
+
+describe("validation de la query de GET /tickets", () => {
+  const invalid = (query: Record<string, unknown>) => parseTicketListQuery(query).ok
+
+  it("applique les valeurs par défaut", () => {
+    expect(parseTicketListQuery({})).toEqual({
+      ok: true,
+      value: { page: 1, limit: 20, sortBy: "createdAt", order: "desc" },
+    })
+  })
+
+  it("accepte des paramètres valides", () => {
+    const result = parseTicketListQuery({
+      page: "2", limit: "100", status: "OPEN", q: "  connexion ", createdById: "7", sortBy: "title", order: "asc",
+    })
+    expect(result).toEqual({
+      ok: true,
+      value: { page: 2, limit: 100, status: "OPEN", q: "connexion", createdById: 7, sortBy: "title", order: "asc" },
+    })
+  })
+
+  it("rejette page et limit hors bornes ou non numériques", () => {
+    for (const bad of [{ page: "0" }, { page: "-1" }, { page: "abc" }, { page: "1.5" }, { page: "1e3" }, { page: "9999999" }]) {
+      expect(invalid(bad)).toBe(false)
+    }
+    for (const bad of [{ limit: "0" }, { limit: "101" }, { limit: "abc" }, { limit: "" }]) {
+      expect(invalid(bad)).toBe(false)
+    }
+  })
+
+  it("rejette status, sortBy, order et createdById invalides", () => {
+    for (const bad of [{ status: "open" }, { status: "DONE" }, { sortBy: "description" }, { sortBy: "id; DROP TABLE" },
+      { order: "ASC" }, { order: "up" }, { createdById: "0" }, { createdById: "x" }]) {
+      expect(invalid(bad)).toBe(false)
+    }
+  })
+
+  it("rejette les paramètres inconnus, même mêlés à des paramètres valides", () => {
+    expect(parseTicketListQuery({ sort: "title" })).toEqual({ ok: false, error: "paramètre inconnu : sort" })
+    expect(invalid({ page: "1", foo: "bar" })).toBe(false)
+    expect(invalid({ "a": { b: "1" } })).toBe(false)
+  })
+
+  it("rejette les paramètres répétés ou imbriqués", () => {
+    expect(invalid({ status: ["OPEN", "CLOSED"] })).toBe(false)
+    expect(invalid({ q: { a: "b" } })).toBe(false)
+  })
+
+  it("traite un q vide comme absent et limite sa longueur", () => {
+    expect(parseTicketListQuery({ q: "   " })).toMatchObject({ ok: true, value: { q: undefined } })
+    expect(invalid({ q: "x".repeat(100) })).toBe(true)
+    expect(invalid({ q: "x".repeat(101) })).toBe(false)
+  })
+
+  it("échappe \\, % et _ pour une recherche LIKE littérale", () => {
+    expect(escapeLikePattern("100%_a\\b")).toBe("100\\%\\_a\\\\b")
+    expect(escapeLikePattern("simple")).toBe("simple")
   })
 })

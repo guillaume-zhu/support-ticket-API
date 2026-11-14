@@ -131,6 +131,26 @@ Pour `POST /tickets`, envoyer un corps JSON :
 { "title": "Connexion", "description": "Je ne peux pas me connecter" }
 ```
 
+`GET /tickets` renvoie une page de résultats :
+
+```json
+{ "data": [], "meta": { "page": 1, "limit": 20, "total": 0, "totalPages": 0 } }
+```
+
+Paramètres de query (tous optionnels ; `400` si invalides ou inconnus) :
+
+| Paramètre     | Valeurs                                           | Défaut      |
+| ------------- | ------------------------------------------------- | ----------- |
+| `page`        | entier >= 1                                       | `1`         |
+| `limit`       | entier de 1 à 100                                 | `20`        |
+| `status`      | `OPEN`, `IN_PROGRESS`, `CLOSED`                   | tous        |
+| `q`           | texte cherché dans le titre (100 car. max)        | aucun       |
+| `createdById` | id d'un auteur (personnel uniquement, sinon `403`) | tous        |
+| `sortBy`      | `id`, `createdAt`, `title`, `status`              | `createdAt` |
+| `order`       | `asc`, `desc`                                     | `desc`      |
+
+Une page au-delà de la dernière renvoie `200` avec `data: []`.
+
 Pour `PATCH /tickets/:id/status`, envoyer par exemple :
 
 ```json
@@ -140,9 +160,10 @@ Pour `PATCH /tickets/:id/status`, envoyer par exemple :
 Statuts autorisés : `OPEN`, `IN_PROGRESS`, `CLOSED`.
 
 Les routes `/tickets` demandent le header
-`Authorization: Bearer <accessToken>`. Les quatre rôles peuvent créer un
-ticket. La lecture et le changement de statut sont réservés à
-`SUPER_ADMIN`, `ADMIN` et `AGENT`. Un token absent ou invalide donne `401` ;
+`Authorization: Bearer <accessToken>`. Les quatre rôles peuvent créer et lire
+des tickets : un `USER` ne voit que les siens (`404` sur le ticket d'un autre),
+le personnel voit tout. Le changement de statut est réservé à `SUPER_ADMIN`,
+`ADMIN` et `AGENT`. Un token absent ou invalide donne `401` ;
 un rôle insuffisant donne `403`.
 
 `POST /users` demande un access token de `SUPER_ADMIN` et un corps JSON :

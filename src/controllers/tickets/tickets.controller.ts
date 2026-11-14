@@ -2,7 +2,7 @@ import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import type { AuthenticatedUser } from "../../middlewares/auth.js"
 import { ticketsService } from "../../services/tickets/tickets.service.js"
-import { parseId } from "../../utils/validation.js"
+import { parseId, parseTicketListQuery } from "../../utils/validation.js"
 
 export function ticketsController(prisma: PrismaClient) {
   const service = ticketsService(prisma)
@@ -11,7 +11,18 @@ export function ticketsController(prisma: PrismaClient) {
     // Réponse a une réponse GET
     list: async (req: Request, res: Response) => {
       const user = res.locals.authUser as AuthenticatedUser
-      res.json(await service.listVisible(user))
+
+      // Valider pagination, filtres et tri avant toute requête en base.
+      const parsed = parseTicketListQuery(req.query)
+      if (!parsed.ok) {
+        return res.status(400).json({ error: parsed.error })
+      }
+      // Filtrer par auteur est réservé au personnel.
+      if (user.role === "USER" && parsed.value.createdById !== undefined) {
+        return res.status(403).json({ error: "Accès interdit" })
+      }
+
+      return res.json(await service.listVisible(user, parsed.value))
     },
 
     // Réponse a une méthode GET avec id en params
