@@ -176,6 +176,32 @@ La réponse `201` contient `id`, `email`, `role` et `status: "INVITED"`.
 Les rôles autorisés à la création sont `ADMIN`, `AGENT` et `USER`.
 Un email invalide ou un rôle inconnu donne `400` ; un email déjà utilisé donne `409`.
 
+## Validation des données entrantes
+
+Toutes les requêtes Prisma sont paramétrées : une valeur n'est jamais interprétée
+comme du SQL, donc un texte qui ressemble à du SQL est traité comme un texte
+ordinaire. Le seul SQL brut du projet est un verrou PostgreSQL écrit avec un
+*tagged template* (`$executeRaw`), dont la valeur est passée en paramètre.
+
+Les données sont aussi validées avant d'atteindre la base. Une entrée invalide
+renvoie `400`, jamais `500`.
+
+| Donnée                              | Règle                                                                 |
+| ----------------------------------- | --------------------------------------------------------------------- |
+| Body JSON                           | objet uniquement ; tout champ non prévu pour l'endpoint donne `400`   |
+| Id dans l'URL, `createdById`        | entier décimal de 1 à 2 147 483 647 (`1e2`, `0x10`, `012` refusés)     |
+| Email                               | 254 caractères max, format valide, sans espaces ni caractères de contrôle |
+| `title` d'un ticket                 | 1 à 200 caractères, une seule ligne                                   |
+| `description` d'un ticket           | 1 à 5 000 caractères, retours à la ligne permis                       |
+| `q` (recherche)                     | 100 caractères max, sans caractères de contrôle                       |
+| Mot de passe                        | 15 caractères min, 1 024 octets max                                   |
+| JWT reçu (`Bearer`, `refreshToken`) | 2 048 caractères max (les vrais tokens en font environ 350)           |
+
+Les caractères de contrôle, dont l'octet NUL que PostgreSQL refuse dans un
+texte, sont interdits. Un test parcourt `src/` et `scripts/` pour détecter les
+usages évidents de SQL brut dangereux (`*Unsafe`, `Prisma.raw`) ; c'est un
+simple garde-fou textuel, pas une garantie exhaustive.
+
 ## Limitation de débit
 
 Les requêtes sont limitées par fenêtre de 15 minutes. Au-delà, l'API répond

@@ -5,15 +5,54 @@ export function normalizeEmail(value: unknown) {
   return typeof value === "string" ? value.trim().toLowerCase() : ""
 }
 
-// Vérifier le format d'un email déjà normalisé (254 caractères maximum)
+// Caractères de contrôle (dont l'octet NUL, que PostgreSQL refuse dans un texte)
+const CONTROL_CHARS = /[\u0000-\u001F\u007F]/
+// Idem, en tolérant tabulation et retours à la ligne (pour un texte sur plusieurs lignes)
+const CONTROL_CHARS_EXCEPT_NEWLINES = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/
+
+// Vérifier le format d'un email déjà normalisé (254 caractères maximum, sans espaces ni caractères de contrôle)
 export function isValidEmail(email: string) {
-  return email.length > 0 && email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  return email.length > 0 && email.length <= 254 && /^[^\s@\u0000-\u001F\u007F]+@[^\s@\u0000-\u001F\u007F]+\.[^\s@\u0000-\u001F\u007F]+$/.test(email)
 }
 
-// Lire un identifiant numérique (entier sûr, 1 minimum) ; null s'il est invalide
+// Plus grand entier d'une colonne PostgreSQL de type Int (32 bits)
+const INT32_MAX = 2_147_483_647
+
+// Lire un identifiant : entier décimal écrit sous sa forme canonique (pas de "1e2", "0x10", "012", "+5"),
+// entre 1 et INT32_MAX pour correspondre aux colonnes Int ; null s'il est invalide
 export function parseId(value: unknown) {
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,9}$/.test(value)) return null
   const id = Number(value)
-  return Number.isSafeInteger(id) && id >= 1 ? id : null
+  return id <= INT32_MAX ? id : null
+}
+
+// Lire un texte : sans espaces autour, non vide, longueur maximale en caractères, sans caractères de contrôle.
+// Avec multiline, les retours à la ligne et tabulations sont permis. Renvoie null si le texte est invalide.
+// Un texte qui ressemble à du SQL est valide : les requêtes Prisma sont paramétrées.
+export function parseText(value: unknown, maxLength: number, multiline = false) {
+  if (typeof value !== "string") return null
+  const text = value.trim()
+  const forbidden = multiline ? CONTROL_CHARS_EXCEPT_NEWLINES : CONTROL_CHARS
+  if (text === "" || [...text].length > maxLength || forbidden.test(text)) return null
+  return text
+}
+
+// Lire le body JSON d'une requête : un objet ne contenant que les champs autorisés de l'endpoint.
+// Un champ inconnu est refusé (400) plutôt qu'ignoré ; l'absence de body équivaut à un objet vide.
+export function parseBody(
+  body: unknown,
+  allowedFields: readonly string[],
+): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
+  if (body === undefined || body === null) return { ok: true, value: {} }
+  if (typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "corps JSON invalide : un objet est attendu" }
+  }
+  for (const name of Object.keys(body)) {
+    if (!allowedFields.includes(name)) {
+      return { ok: false, error: `champ inconnu : ${name.slice(0, 50)}` }
+    }
+  }
+  return { ok: true, value: body as Record<string, unknown> }
 }
 
 export const TICKET_STATUSES = ["OPEN", "IN_PROGRESS", "CLOSED"] as const
@@ -76,6 +115,9 @@ export function parseTicketListQuery(
   const q = raw.q?.trim() || undefined
   if (q !== undefined && q.length > TICKET_SEARCH_MAX_LENGTH) {
     return { ok: false, error: `q trop long (${TICKET_SEARCH_MAX_LENGTH} caractères maximum)` }
+  }
+  if (q !== undefined && CONTROL_CHARS.test(q)) {
+    return { ok: false, error: "q invalide (caractères de contrôle interdits)" }
   }
 
   let createdById: number | undefined

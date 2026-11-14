@@ -2,7 +2,7 @@ import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import type { AuthenticatedUser } from "../../middlewares/auth.js"
 import { ticketsService } from "../../services/tickets/tickets.service.js"
-import { parseId, parseTicketListQuery } from "../../utils/validation.js"
+import { parseBody, parseId, parseText, parseTicketListQuery } from "../../utils/validation.js"
 
 export function ticketsController(prisma: PrismaClient) {
   const service = ticketsService(prisma)
@@ -46,23 +46,23 @@ export function ticketsController(prisma: PrismaClient) {
 
     // Réponse a une methode POST
     create: async (req: Request, res: Response) => {
-      const { title, description } = req.body ?? {}
+      // Seuls title et description sont acceptés : l'auteur vient de l'identité authentifiée.
+      const body = parseBody(req.body, ["title", "description"])
+      if (!body.ok) {
+        return res.status(400).json({ error: body.error })
+      }
 
-      // Vérification de title et description
-      if (
-        typeof title !== "string" ||
-        title.trim() === "" ||
-        typeof description !== "string" ||
-        description.trim() === ""
-      ) {
-        return res.status(400).json({ error: "title et description sont requis" })
+      // Texte non vide, sans caractères de contrôle ; titre sur une ligne.
+      const title = parseText(body.value.title, 200)
+      const description = parseText(body.value.description, 5000, true)
+      if (title === null || description === null) {
+        return res.status(400).json({
+          error: "title (200 caractères max) et description (5000 max) sont requis, sans caractères de contrôle",
+        })
       }
 
       const user = res.locals.authUser as AuthenticatedUser
-      const ticket = await service.create(
-        { title: title.trim(), description: description.trim() },
-        user,
-      )
+      const ticket = await service.create({ title, description }, user)
 
       return res.status(201).json(ticket)
     },
@@ -75,16 +75,19 @@ export function ticketsController(prisma: PrismaClient) {
         return res.status(400).json({ error: "id invalide" })
       }
 
+      const body = parseBody(req.body, ["status"])
+      if (!body.ok) {
+        return res.status(400).json({ error: body.error })
+      }
+      const status = body.value.status
+      if (status !== "OPEN" && status !== "IN_PROGRESS" && status !== "CLOSED") {
+        return res.status(400).json({ error: "status invalide" })
+      }
+
       const ticket = await prisma.ticket.findUnique({ where: { id } })
 
       if (!ticket) {
         return res.status(404).json({ error: "ticket introuvable" })
-      }
-
-      const status: unknown = req.body?.status
-
-      if (status !== "OPEN" && status !== "IN_PROGRESS" && status !== "CLOSED") {
-        return res.status(400).json({ error: "status invalide" })
       }
 
       const updated = await prisma.ticket.update({

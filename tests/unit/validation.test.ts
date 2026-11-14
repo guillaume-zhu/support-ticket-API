@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { escapeLikePattern, isValidEmail, normalizeEmail, parseId, parseTicketListQuery } from "../../src/utils/validation.js"
+import { escapeLikePattern, isValidEmail, normalizeEmail, parseBody, parseId, parseText, parseTicketListQuery } from "../../src/utils/validation.js"
 import { isActionTokenFormat, isValidNewPassword, generateActionToken, hashActionToken, hashPassword } from "../../src/utils/credentials.js"
 import { parseSubjectId } from "../../src/utils/jwt.js"
 import { parseTrustProxy } from "../../src/middlewares/rate-limit.js"
@@ -20,6 +20,11 @@ describe("validation des valeurs réutilisables", () => {
     expect(parseId("1.5")).toBeNull()
     expect(parseId("Infinity")).toBeNull()
     expect(parseId("9007199254740992")).toBeNull()
+    expect(parseId("2147483647")).toBe(2147483647)
+    for (const bad of ["2147483648", "99999999999", "1e2", "0x10", "012", "+5", "5.0", " 12", "12 ", "", "-1", "٣"]) {
+      expect(parseId(bad)).toBeNull()
+    }
+    expect(parseId(12)).toBeNull() // seule une chaîne d'URL ou de JWT est attendue
     expect(parseSubjectId("12")).toBe(12)
     expect(parseSubjectId("012")).toBeNull()
     expect(parseSubjectId("1.0")).toBeNull()
@@ -122,5 +127,46 @@ describe("lecture de TRUST_PROXY", () => {
     for (const bad of ["true", "-1", "1.5", "loopback", "100"]) {
       expect(() => parseTrustProxy(bad)).toThrow()
     }
+  })
+})
+
+describe("validation de texte, d'email et de body", () => {
+  it("rejette les caractères de contrôle dans un email", () => {
+    expect(isValidEmail("a\u0000@example.com")).toBe(false)
+    expect(isValidEmail("a\u001f@example.com")).toBe(false)
+    expect(isValidEmail("a'--@example.com")).toBe(true) // ressemble à du SQL mais reste un email bien formé
+  })
+
+  it("valide un texte : trim, non vide, longueur, caractères de contrôle", () => {
+    expect(parseText("  Bonjour  ", 200)).toBe("Bonjour")
+    expect(parseText("   ", 200)).toBeNull()
+    expect(parseText(42, 200)).toBeNull()
+    expect(parseText("x".repeat(200), 200)).not.toBeNull()
+    expect(parseText("x".repeat(201), 200)).toBeNull()
+    expect(parseText("😀".repeat(200), 200)).not.toBeNull() // compte des caractères, pas des octets
+    expect(parseText("a\u0000b", 200)).toBeNull()
+    expect(parseText("a\nb", 200)).toBeNull()
+    expect(parseText("a\nb\tc", 200, true)).toBe("a\nb\tc")
+    expect(parseText("a\u0000b", 200, true)).toBeNull()
+  })
+
+  it("accepte du SQL comme texte ordinaire", () => {
+    const sql = `'; DROP TABLE "Ticket"; --`
+    expect(parseText(sql, 200)).toBe(sql)
+  })
+
+  it("lit un body en refusant champs inconnus, tableaux et valeurs non objet", () => {
+    expect(parseBody(undefined, ["a"])).toEqual({ ok: true, value: {} })
+    expect(parseBody({ a: 1 }, ["a", "b"])).toEqual({ ok: true, value: { a: 1 } })
+    expect(parseBody({ a: 1, c: 2 }, ["a"])).toEqual({ ok: false, error: "champ inconnu : c" })
+    expect(parseBody({ x: 1 }, [])).toEqual({ ok: false, error: "champ inconnu : x" })
+    expect(parseBody([], ["a"]).ok).toBe(false)
+    expect(parseBody("texte", ["a"]).ok).toBe(false)
+    expect(parseBody(JSON.parse('{"__proto__":{"admin":true}}'), ["a"]).ok).toBe(false)
+  })
+
+  it("refuse un caractère de contrôle dans q", () => {
+    expect(parseTicketListQuery({ q: "a\u0000b" }).ok).toBe(false)
+    expect(parseTicketListQuery({ q: "DROP TABLE" }).ok).toBe(true)
   })
 })

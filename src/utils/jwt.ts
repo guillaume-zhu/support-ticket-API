@@ -5,6 +5,10 @@ import { parseId } from "./validation.js"
 export const JWT_ISSUER = "support-ticket-api"
 export const JWT_AUDIENCE = "support-ticket-api"
 
+// Taille maximale acceptée pour un JWT reçu (les nôtres font environ 350 caractères) :
+// évite de traiter inutilement des chaînes énormes
+export const MAX_JWT_LENGTH = 2048
+
 // Durée de l'access token : sert à le signer ET à refuser un token trop ancien (maxTokenAge)
 export const ACCESS_TOKEN_LIFETIME = "15m"
 

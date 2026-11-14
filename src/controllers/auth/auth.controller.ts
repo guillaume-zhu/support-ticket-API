@@ -1,7 +1,8 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import { authService } from "../../services/auth/auth.service.js"
-import { normalizeEmail } from "../../utils/validation.js"
+import { MAX_JWT_LENGTH } from "../../utils/jwt.js"
+import { isValidEmail, normalizeEmail, parseBody } from "../../utils/validation.js"
 
 // Lecture des requêtes HTTP d'authentification ; la logique métier est dans authService
 export function authController(prisma: PrismaClient) {
@@ -10,11 +11,14 @@ export function authController(prisma: PrismaClient) {
   return {
     // Vérification des identifiants de connexion
     login: async (req: Request, res: Response) => {
-      const { email, password } = req.body ?? {}
+      const body = parseBody(req.body, ["email", "password"])
+      if (!body.ok) {
+        return res.status(400).json({ error: body.error })
+      }
+      // Tous les comptes ont un email valide : un autre format ne peut correspondre à aucun compte.
+      const { email, password } = body.value
       if (
-        typeof email !== "string" ||
-        email.trim() === "" ||
-        email.length > 254 ||
+        !isValidEmail(normalizeEmail(email)) ||
         typeof password !== "string" ||
         password === "" ||
         Buffer.byteLength(password, "utf8") > 1024
@@ -31,8 +35,12 @@ export function authController(prisma: PrismaClient) {
 
     // Renouvellement des tokens
     refresh: async (req: Request, res: Response) => {
-      const { refreshToken } = req.body ?? {}
-      if (typeof refreshToken !== "string" || refreshToken === "") {
+      const body = parseBody(req.body, ["refreshToken"])
+      if (!body.ok) {
+        return res.status(400).json({ error: body.error })
+      }
+      const { refreshToken } = body.value
+      if (typeof refreshToken !== "string" || refreshToken === "" || refreshToken.length > MAX_JWT_LENGTH) {
         return res.status(400).json({ error: "refreshToken requis" })
       }
 
@@ -45,8 +53,12 @@ export function authController(prisma: PrismaClient) {
 
     // Déconnexion
     logout: async (req: Request, res: Response) => {
-      const { refreshToken } = req.body ?? {}
-      if (typeof refreshToken !== "string" || refreshToken === "") {
+      const body = parseBody(req.body, ["refreshToken"])
+      if (!body.ok) {
+        return res.status(400).json({ error: body.error })
+      }
+      const { refreshToken } = body.value
+      if (typeof refreshToken !== "string" || refreshToken === "" || refreshToken.length > MAX_JWT_LENGTH) {
         return res.status(400).json({ error: "refreshToken requis" })
       }
 

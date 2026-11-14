@@ -6,6 +6,7 @@ import {
   JWT_AUDIENCE,
   JWT_ISSUER,
   jwtKey,
+  MAX_JWT_LENGTH,
   parseSubjectId,
 } from "../utils/jwt.js"
 
@@ -18,7 +19,7 @@ export function authenticate(prisma: PrismaClient): RequestHandler {
   return async (req, res, next) => {
     // Lire le token envoyé et vérifier sa signature, sa durée et son usage.
     const token = req.headers.authorization?.match(/^Bearer ([^\s]+)$/i)?.[1]
-    if (!token) {
+    if (!token || token.length > MAX_JWT_LENGTH) {
       return res.status(401).json({ error: "Authentification requise" })
     }
 

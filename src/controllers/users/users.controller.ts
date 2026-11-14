@@ -1,7 +1,7 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import { usersService } from "../../services/users/users.service.js"
-import { isValidEmail, normalizeEmail, parseId } from "../../utils/validation.js"
+import { isValidEmail, normalizeEmail, parseBody, parseId } from "../../utils/validation.js"
 
 // Lecture des requêtes HTTP de gestion des comptes ; la logique métier est dans usersService
 export function usersController(prisma: PrismaClient) {
@@ -10,7 +10,11 @@ export function usersController(prisma: PrismaClient) {
   return {
     create: async (req: Request, res: Response) => {
       // Vérifier et normaliser les données envoyées par le Super Admin.
-      const { email, role } = req.body ?? {}
+      const body = parseBody(req.body, ["email", "role"])
+      if (!body.ok) {
+        return res.status(400).json({ error: body.error })
+      }
+      const { email, role } = body.value
       const normalizedEmail = normalizeEmail(email)
       if (!isValidEmail(normalizedEmail)) {
         return res.status(400).json({ error: "email invalide" })
@@ -30,6 +34,11 @@ export function usersController(prisma: PrismaClient) {
       const id = parseId(req.params.id)
       if (id === null) {
         return res.status(400).json({ error: "id invalide" })
+      }
+      // Cette route n'attend aucun body.
+      const body = parseBody(req.body, [])
+      if (!body.ok) {
+        return res.status(400).json({ error: body.error })
       }
 
       const result = await service.invite(id)
@@ -53,6 +62,11 @@ export function usersController(prisma: PrismaClient) {
       if (id === null) {
         return res.status(400).json({ error: "id invalide" })
       }
+      // Cette route n'attend aucun body.
+      const body = parseBody(req.body, [])
+      if (!body.ok) {
+        return res.status(400).json({ error: body.error })
+      }
 
       const result = await service.disable(id)
       if (result === "NOT_FOUND") {
@@ -74,6 +88,11 @@ export function usersController(prisma: PrismaClient) {
       const id = parseId(req.params.id)
       if (id === null) {
         return res.status(400).json({ error: "id invalide" })
+      }
+      // Cette route n'attend aucun body.
+      const body = parseBody(req.body, [])
+      if (!body.ok) {
+        return res.status(400).json({ error: body.error })
       }
 
       const result = await service.enable(id)

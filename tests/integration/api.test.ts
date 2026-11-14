@@ -112,10 +112,15 @@ describe("Authentification des routes tickets", () => {
 })
 
 describe("Propriété des tickets", () => {
-  it("enregistre l'auteur authentifié et ignore un createdById fourni par le client", async () => {
+  it("enregistre l'auteur authentifié et refuse un createdById fourni par le client", async () => {
     const alice = await createUser("USER", "alice")
     const bob = await createUser("USER", "bob")
-    const created = await createTicket(alice.token, { createdById: bob.id })
+    const forged = await createTicket(alice.token, { createdById: bob.id })
+    expect(forged.status).toBe(400)
+    expect(forged.body).toEqual({ error: "champ inconnu : createdById" })
+    expect(await prisma.ticket.count()).toBe(0)
+
+    const created = await createTicket(alice.token)
     expect(created.status).toBe(201)
     expect(created.body.createdById).toBe(alice.id)
   })
