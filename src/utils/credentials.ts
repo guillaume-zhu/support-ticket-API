@@ -14,11 +14,13 @@ export function hashPassword(password: string) {
 }
 
 // Politique de mot de passe : 15 caractères minimum, 1024 octets maximum
+export const PASSWORD_MIN_LENGTH = 15
+export const PASSWORD_MAX_BYTES = 1024
 export function isValidNewPassword(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    [...value].length >= 15 &&
-    Buffer.byteLength(value, "utf8") <= 1024
+    [...value].length >= PASSWORD_MIN_LENGTH &&
+    Buffer.byteLength(value, "utf8") <= PASSWORD_MAX_BYTES
   )
 }
 
@@ -27,13 +29,18 @@ export function hashActionToken(token: string) {
   return createHash("sha256").update(token).digest("hex")
 }
 
+// Longueur d'un code à usage unique : 32 octets en base64url
+export const ACTION_TOKEN_LENGTH = 43
+
 // Générer un code à usage unique (32 octets en base64url, soit 43 caractères) et son hash
 export function generateActionToken() {
   const token = randomBytes(32).toString("base64url")
   return { token, tokenHash: hashActionToken(token) }
 }
 
+const ACTION_TOKEN_PATTERN = new RegExp(`^[A-Za-z0-9_-]{${ACTION_TOKEN_LENGTH}}$`)
+
 // Format d'un code reçu : doit correspondre à generateActionToken
 export function isActionTokenFormat(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value)
+  return typeof value === "string" && ACTION_TOKEN_PATTERN.test(value)
 }

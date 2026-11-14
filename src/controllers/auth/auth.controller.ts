@@ -1,6 +1,7 @@
 import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import { authService } from "../../services/auth/auth.service.js"
+import { PASSWORD_MAX_BYTES } from "../../utils/credentials.js"
 import { MAX_JWT_LENGTH } from "../../utils/jwt.js"
 import { isValidEmail, normalizeEmail, parseBody } from "../../utils/validation.js"
 
@@ -21,7 +22,7 @@ export function authController(prisma: PrismaClient) {
         !isValidEmail(normalizeEmail(email)) ||
         typeof password !== "string" ||
         password === "" ||
-        Buffer.byteLength(password, "utf8") > 1024
+        Buffer.byteLength(password, "utf8") > PASSWORD_MAX_BYTES
       ) {
         return res.status(400).json({ error: "email et password requis" })
       }

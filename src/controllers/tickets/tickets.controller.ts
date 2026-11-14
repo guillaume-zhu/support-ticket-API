@@ -2,7 +2,14 @@ import type { Request, Response } from "express"
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import type { AuthenticatedUser } from "../../middlewares/auth.js"
 import { ticketsService } from "../../services/tickets/tickets.service.js"
-import { parseBody, parseId, parseText, parseTicketListQuery } from "../../utils/validation.js"
+import {
+  parseBody,
+  parseId,
+  parseText,
+  parseTicketListQuery,
+  TICKET_DESCRIPTION_MAX_LENGTH,
+  TICKET_TITLE_MAX_LENGTH,
+} from "../../utils/validation.js"
 
 export function ticketsController(prisma: PrismaClient) {
   const service = ticketsService(prisma)
@@ -53,11 +60,11 @@ export function ticketsController(prisma: PrismaClient) {
       }
 
       // Texte non vide, sans caractères de contrôle ; titre sur une ligne.
-      const title = parseText(body.value.title, 200)
-      const description = parseText(body.value.description, 5000, true)
+      const title = parseText(body.value.title, TICKET_TITLE_MAX_LENGTH)
+      const description = parseText(body.value.description, TICKET_DESCRIPTION_MAX_LENGTH, true)
       if (title === null || description === null) {
         return res.status(400).json({
-          error: "title (200 caractères max) et description (5000 max) sont requis, sans caractères de contrôle",
+          error: `title (${TICKET_TITLE_MAX_LENGTH} caractères max) et description (${TICKET_DESCRIPTION_MAX_LENGTH} max) sont requis, sans caractères de contrôle`,
         })
       }
 

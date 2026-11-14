@@ -10,9 +10,13 @@ const CONTROL_CHARS = /[\u0000-\u001F\u007F]/
 // Idem, en tolérant tabulation et retours à la ligne (pour un texte sur plusieurs lignes)
 const CONTROL_CHARS_EXCEPT_NEWLINES = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/
 
+export const EMAIL_MAX_LENGTH = 254
+export const TICKET_TITLE_MAX_LENGTH = 200
+export const TICKET_DESCRIPTION_MAX_LENGTH = 5000
+
 // Vérifier le format d'un email déjà normalisé (254 caractères maximum, sans espaces ni caractères de contrôle)
 export function isValidEmail(email: string) {
-  return email.length > 0 && email.length <= 254 && /^[^\s@\u0000-\u001F\u007F]+@[^\s@\u0000-\u001F\u007F]+\.[^\s@\u0000-\u001F\u007F]+$/.test(email)
+  return email.length > 0 && email.length <= EMAIL_MAX_LENGTH && /^[^\s@\u0000-\u001F\u007F]+@[^\s@\u0000-\u001F\u007F]+\.[^\s@\u0000-\u001F\u007F]+$/.test(email)
 }
 
 // Plus grand entier d'une colonne PostgreSQL de type Int (32 bits)
@@ -59,8 +63,8 @@ export const TICKET_STATUSES = ["OPEN", "IN_PROGRESS", "CLOSED"] as const
 export const TICKET_SORT_FIELDS = ["id", "createdAt", "title", "status"] as const
 export const TICKET_SEARCH_MAX_LENGTH = 100
 const TICKET_LIST_PARAMS = ["page", "limit", "status", "q", "createdById", "sortBy", "order"]
-const MAX_PAGE_SIZE = 100
-const MAX_PAGE = 1_000_000
+export const MAX_PAGE_SIZE = 100
+export const MAX_PAGE = 1_000_000
 
 export type TicketListOptions = {
   page: number

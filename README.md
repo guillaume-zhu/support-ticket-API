@@ -203,6 +203,43 @@ texte, sont interdits. Un test parcourt `src/` et `scripts/` pour détecter les
 usages évidents de SQL brut dangereux (`*Unsafe`, `Prisma.raw`) ; c'est un
 simple garde-fou textuel, pas une garantie exhaustive.
 
+## Documentation de l'API (OpenAPI et Swagger UI)
+
+Le contrat de l'API est décrit en **OpenAPI 3.1** dans `src/docs/openapi.ts`
+(objet TypeScript, descriptions en français, noms techniques en anglais).
+Deux adresses sont exposées :
+
+| URL             | Contenu                                                    |
+| --------------- | ---------------------------------------------------------- |
+| `/docs`         | Swagger UI : lire le contrat et tester les endpoints       |
+| `/openapi.json` | Le contrat brut, pour Postman ou un générateur de client   |
+
+Dans Swagger UI : appeler `POST /auth/login`, copier l'`accessToken`, cliquer sur
+**Authorize** et le coller (sans le mot `Bearer`). Chaque opération indique ses
+rôles autorisés (description et extension `x-roles`), ses champs avec leurs
+limites et tous ses codes de réponse, y compris les `204` sans corps et les
+`429` avec `Retry-After`. Les exemples sont fictifs.
+
+La documentation est **active par défaut, sauf en production**. La variable
+`API_DOCS` force le réglage : `API_DOCS=true` ou `API_DOCS=false` (toute autre
+valeur est refusée au démarrage). Elle n'est pas protégée par authentification
+et reste soumise à la limitation de débit globale. Désactivée, `/docs` et
+`/openapi.json` renvoient le `404` JSON habituel.
+
+**Le contrat décrit l'API, il ne la valide pas** : les règles réelles restent
+dans les controllers et `src/utils`. Pour qu'il ne mente pas, les tests :
+
+- vérifient qu'il est un OpenAPI 3.1 valide et que ses schémas compilent avec
+  Ajv en JSON Schema 2020-12 (mode strict) ;
+- comparent de **vraies réponses HTTP** de chaque opération (succès et erreurs)
+  à ses schémas ;
+- vérifient que les rôles documentés sont ceux réellement appliqués ;
+- vérifient que ses énumérations et limites correspondent aux validateurs ;
+- détectent une route du code absente du contrat (contrôle textuel simple, non
+  exhaustif).
+
+Ajouter une route demande donc de la décrire dans `src/docs/openapi.ts`.
+
 ## Journal d'audit
 
 Chaque action sensible réussie ajoute une ligne à la table `AuditLog` : qui

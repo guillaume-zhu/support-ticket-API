@@ -8,6 +8,7 @@ import {
   defaultRateLimits,
   type RateLimits,
 } from "./middlewares/rate-limit.js"
+import { docsRoutes } from "./routes/docs/index.js"
 import { registerRoutes } from "./routes/index.js"
 
 export type AppOptions = {
@@ -17,6 +18,8 @@ export type AppOptions = {
   rateLimitWindowMs?: number
   // Nombre de proxys de confiance devant l'application (0 = aucun).
   trustProxy?: number
+  // Exposer /docs (Swagger UI) et /openapi.json. Désactivé par défaut : index.ts applique la règle API_DOCS.
+  apiDocs?: boolean
 }
 
 // Construire l'application sans ouvrir de port, pour les tests HTTP.
@@ -34,6 +37,9 @@ export function createApp(prisma: PrismaClient, options: AppOptions = {}) {
           options.rateLimitWindowMs ?? DEFAULT_WINDOW_MS,
         )
   app.use(limiters.global)
+  if (options.apiDocs) {
+    app.use(docsRoutes())
+  }
   registerRoutes(app, prisma, limiters)
 
   // L'ordre compte : routes, puis 404, puis gestionnaire d'erreurs en dernier.
