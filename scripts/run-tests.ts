@@ -23,6 +23,7 @@ const env = {
   AI_MAX_OUTPUT_TOKENS: "",
   AI_TIMEOUT_MS: "",
   AI_REASONING_EFFORT: "",
+  AI_TICKET_TOOLS: "",
 }
 
 // Migrer uniquement la base de test validée avant de démarrer Vitest.

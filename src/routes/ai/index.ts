@@ -6,7 +6,7 @@ import type { RateLimiters } from "../../middlewares/rate-limit.js"
 
 export function aiRoutes(prisma: PrismaClient, limiters: RateLimiters) {
   const router = Router()
-  const ai = aiController()
+  const ai = aiController(prisma)
 
   // Tous les comptes connectés peuvent interroger l'assistant. Les limiteurs viennent APRÈS l'authentification :
   // ils comptent par utilisateur, et une requête sans token valide ne consomme aucun quota. L'appel payant

@@ -1,13 +1,21 @@
+import type { PrismaClient } from "../../generated/prisma/client.js"
+import type { AuthenticatedUser } from "../../middlewares/auth.js"
 import type { ChatMessage } from "../../utils/validation.js"
-import { SYSTEM_PROMPT } from "./ai.prompt.js"
+import { ticketsService } from "../tickets/tickets.service.js"
+import { SYSTEM_PROMPT, SYSTEM_PROMPT_WITH_TICKETS } from "./ai.prompt.js"
+import { executeTicketTool, TICKET_TOOLS, type TicketToolName } from "./ai.tools.js"
 
 // Appel du fournisseur d'IA (OpenAI ou DeepSeek) avec l'API « Responses », que les deux documentent.
 // Un seul point d'appel : si le format change, c'est ici et seulement ici qu'il faut intervenir.
-// Rien de ce qui est échangé (messages, réponses, corps d'erreur du fournisseur) n'est stocké ni journalisé.
+// Rien de ce qui est échangé (messages, réponses, résultats d'outils, raisonnement, corps d'erreur du fournisseur)
+// n'est stocké ni journalisé : seuls des messages fixes, sans contenu, sont écrits dans les logs.
 
+// `declaresStrictFalse` : OpenAI documente `strict` sur les outils de l'API Responses, donc on écrit explicitement
+// strict: false (les arguments sont validés côté serveur de toute façon). DeepSeek ne le documente pas pour ce format
+// (strict n'existe que dans son mode bêta) : on omet le champ, ce qui revient au mode non strict.
 const PROVIDERS = {
-  openai: { baseUrl: "https://api.openai.com/v1" },
-  deepseek: { baseUrl: "https://api.deepseek.com" },
+  openai: { baseUrl: "https://api.openai.com/v1", declaresStrictFalse: true },
+  deepseek: { baseUrl: "https://api.deepseek.com", declaresStrictFalse: false },
 } as const
 export type AiProvider = keyof typeof PROVIDERS
 
@@ -23,12 +31,23 @@ export type AiConfig = {
   maxOutputTokens: number
   timeoutMs: number
   reasoningEffort: (typeof REASONING_EFFORTS)[number] | undefined
+  // Autoriser l'assistant à consulter les tickets (outils list_tickets et get_ticket). Désactivé par défaut :
+  // activer cette option envoie au fournisseur le contenu des tickets que l'utilisateur a le droit de voir.
+  ticketTools: boolean
 }
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 2000
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_REPLY_CHARS = 6000
 const MAX_PROVIDER_BODY_CHARS = 1_000_000
+
+// Bornes de la boucle d'outils : elles limitent le coût, la durée et l'effet d'un modèle qui boucle.
+export const MAX_PROVIDER_CALLS = 3 // appels au fournisseur par requête HTTP (au plus 2 tours d'outils, puis la réponse)
+export const MAX_TOOL_CALLS_PER_ROUND = 4
+const MAX_TOTAL_MS = 60_000
+const MIN_CALL_BUDGET_MS = 1000
+const MAX_OUTPUT_ITEMS = 50
+const MAX_CALL_ID_CHARS = 64
 
 function readInteger(name: string, value: string | undefined, min: number, max: number, fallback: number) {
   if (value === undefined || value === "") return fallback
@@ -70,6 +89,11 @@ export function parseAiConfig(env: Record<string, string | undefined>): AiConfig
     throw new Error(`AI_REASONING_EFFORT doit valoir ${REASONING_EFFORTS.join(", ")}`)
   }
 
+  const ticketTools = env.AI_TICKET_TOOLS
+  if (ticketTools && ticketTools !== "true" && ticketTools !== "false") {
+    throw new Error("AI_TICKET_TOOLS doit valoir true ou false")
+  }
+
   return {
     provider: provider as AiProvider,
     apiKey,
@@ -78,25 +102,46 @@ export function parseAiConfig(env: Record<string, string | undefined>): AiConfig
     maxOutputTokens: readInteger("AI_MAX_OUTPUT_TOKENS", env.AI_MAX_OUTPUT_TOKENS, 16, 8000, DEFAULT_MAX_OUTPUT_TOKENS),
     timeoutMs: readInteger("AI_TIMEOUT_MS", env.AI_TIMEOUT_MS, 5000, 120_000, DEFAULT_TIMEOUT_MS),
     reasoningEffort: (effort || undefined) as AiConfig["reasoningEffort"],
+    ticketTools: ticketTools === "true",
   }
 }
 
 // Construire la requête envoyée au fournisseur. La clé n'apparaît que dans l'en-tête Authorization.
-// Seuls les paramètres communs aux deux fournisseurs sont envoyés ; store: false demande de ne pas conserver
-// la réponse côté OpenAI (DeepSeek ignore ce paramètre). Aucune donnée d'identité n'est transmise.
-export function buildResponsesRequest(config: AiConfig, messages: ChatMessage[]) {
+// `input` est la conversation, suivie (pendant la boucle d'outils) des éléments renvoyés par le modèle et des
+// résultats d'outils. Seuls les paramètres communs aux deux fournisseurs sont envoyés ; store: false demande de ne pas
+// conserver la réponse côté OpenAI (DeepSeek ignore ce paramètre). Aucune donnée d'identité n'est transmise.
+export function buildResponsesRequest(config: AiConfig, input: unknown[]) {
   return {
     url: `${config.baseUrl}/responses`,
     headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
     body: {
       model: config.model,
-      instructions: SYSTEM_PROMPT,
-      input: messages.map(({ role, content }) => ({ role, content })),
+      instructions: config.ticketTools ? SYSTEM_PROMPT_WITH_TICKETS : SYSTEM_PROMPT,
+      input,
       max_output_tokens: config.maxOutputTokens,
       store: false,
+      ...(config.ticketTools && {
+        tools: TICKET_TOOLS.map((tool) => ({ ...tool, ...(PROVIDERS[config.provider].declaresStrictFalse && { strict: false }) })),
+      }),
       ...(config.reasoningEffort && { reasoning: { effort: config.reasoningEffort } }),
     },
   }
+}
+
+type ProviderItem = { type: string; [key: string]: unknown }
+
+// Éléments de sortie du modèle (messages, appels de fonctions, raisonnement...) ; null si la réponse est démesurée.
+function outputItems(body: unknown): ProviderItem[] | null {
+  const output = (body as { output?: unknown } | null)?.output
+  if (!Array.isArray(output)) return []
+  if (output.length > MAX_OUTPUT_ITEMS) return null
+  return output.filter((item): item is ProviderItem => typeof item === "object" && item !== null && typeof item.type === "string")
+}
+
+function responseFailed(body: unknown) {
+  if (typeof body !== "object" || body === null) return true
+  const response = body as { status?: unknown; error?: unknown }
+  return response.status === "failed" || response.status === "cancelled" || Boolean(response.error)
 }
 
 // Extraire le texte de la réponse du fournisseur ; null si elle est inutilisable.
@@ -124,14 +169,53 @@ export function extractReply(body: unknown): string | null {
 }
 
 export type AiChatResult =
-  | { status: "OK"; reply: string }
+  // toolsUsed : outils exécutés avec succès par le serveur (sans doublon, dans l'ordre du premier usage).
+  // Ni un simple appel proposé par le modèle, ni un appel refusé ou en erreur ; ce n'est pas une preuve que la réponse est exacte.
+  | { status: "OK"; reply: string; toolsUsed: TicketToolName[] }
   | { status: "NOT_CONFIGURED" }
   | { status: "PROVIDER_FAILED" }
 
-// Envoyer la conversation au fournisseur et renvoyer sa réponse.
-export function aiService() {
+// Un échec : on journalise seulement une raison fixe (jamais de contenu) et le client reçoit un 502 générique.
+function failed(reason: string): AiChatResult {
+  console.error(`Assistant IA : ${reason}`)
+  return { status: "PROVIDER_FAILED" }
+}
+
+// Un appel au fournisseur : renvoie la réponse décodée, ou null (déjà journalisé) en cas d'échec.
+async function callProvider(config: AiConfig, input: unknown[], timeoutMs: number): Promise<unknown | null> {
+  const request = buildResponsesRequest(config, input)
+  try {
+    const response = await fetch(request.url, {
+      method: "POST",
+      headers: request.headers,
+      body: JSON.stringify(request.body),
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: "error",
+    })
+    if (!response.ok) {
+      // Seul le code HTTP est journalisé : le corps d'erreur du fournisseur n'est ni lu ni conservé.
+      console.error(`Assistant IA : le fournisseur a répondu HTTP ${response.status}`)
+      return null
+    }
+    const text = await response.text()
+    if (text.length > MAX_PROVIDER_BODY_CHARS) {
+      console.error("Assistant IA : réponse du fournisseur trop volumineuse")
+      return null
+    }
+    return JSON.parse(text)
+  } catch (error) {
+    const timeout = error instanceof Error && error.name === "TimeoutError"
+    console.error(`Assistant IA : appel impossible (${timeout ? "délai dépassé" : "erreur réseau ou réponse illisible"})`)
+    return null
+  }
+}
+
+// Conversation avec le fournisseur d'IA, avec boucle d'outils de consultation des tickets si elle est activée.
+export function aiService(prisma: PrismaClient) {
+  const tickets = ticketsService(prisma)
+
   return {
-    chat: async (messages: ChatMessage[]): Promise<AiChatResult> => {
+    chat: async (messages: ChatMessage[], user: AuthenticatedUser): Promise<AiChatResult> => {
       let config: AiConfig | null
       try {
         config = parseAiConfig(process.env)
@@ -141,37 +225,56 @@ export function aiService() {
       }
       if (!config) return { status: "NOT_CONFIGURED" }
 
-      const request = buildResponsesRequest(config, messages)
-      try {
-        const response = await fetch(request.url, {
-          method: "POST",
-          headers: request.headers,
-          body: JSON.stringify(request.body),
-          signal: AbortSignal.timeout(config.timeoutMs),
-          redirect: "error",
-        })
-        if (!response.ok) {
-          // Seul le code HTTP est journalisé : le corps d'erreur du fournisseur n'est ni lu ni conservé.
-          console.error(`Assistant IA : le fournisseur a répondu HTTP ${response.status}`)
-          return { status: "PROVIDER_FAILED" }
+      const startedAt = Date.now()
+      const input: unknown[] = messages.map(({ role, content }) => ({ role, content }))
+      const toolsUsed: TicketToolName[] = []
+
+      for (let attempt = 1; attempt <= MAX_PROVIDER_CALLS; attempt++) {
+        const remaining = MAX_TOTAL_MS - (Date.now() - startedAt)
+        if (remaining < MIN_CALL_BUDGET_MS) return failed("délai global dépassé")
+
+        const body = await callProvider(config, input, Math.min(config.timeoutMs, remaining))
+        if (body === null) return { status: "PROVIDER_FAILED" }
+        const items = outputItems(body)
+        if (items === null || responseFailed(body)) return failed("réponse du fournisseur inutilisable (échec ou démesurée)")
+
+        const calls = items.filter((item) => item.type === "function_call")
+        if (calls.length === 0) {
+          const reply = extractReply(body)
+          if (reply === null) return failed("réponse du fournisseur inutilisable (vide, ou plafond de tokens atteint avant le texte)")
+          return { status: "OK", reply, toolsUsed }
         }
 
-        const text = await response.text()
-        if (text.length > MAX_PROVIDER_BODY_CHARS) {
-          console.error("Assistant IA : réponse du fournisseur trop volumineuse")
-          return { status: "PROVIDER_FAILED" }
+        // Le modèle propose des appels de fonctions. Plusieurs garde-fous AVANT d'exécuter quoi que ce soit :
+        if (!config.ticketTools) return failed("le fournisseur demande un outil alors qu'aucun n'est déclaré")
+        // Une réponse coupée par le plafond de tokens peut contenir des arguments tronqués : on n'exécute rien.
+        if ((body as { status?: unknown }).status === "incomplete") {
+          return failed("réponse incomplète pendant un appel d'outil : aucun outil exécuté")
         }
-        const reply = extractReply(JSON.parse(text))
-        if (reply === null) {
-          console.error("Assistant IA : réponse du fournisseur inutilisable (vide, échec, ou plafond de tokens atteint avant le texte)")
-          return { status: "PROVIDER_FAILED" }
+        // Dernier appel autorisé : exécuter des outils dont le résultat ne pourrait plus servir n'a pas de sens.
+        if (attempt === MAX_PROVIDER_CALLS) return failed("limite d'appels d'outils atteinte sans réponse finale")
+        const callIds = calls.map((call) => call.call_id)
+        const validIds = callIds.every((id) => typeof id === "string" && id !== "" && id.length <= MAX_CALL_ID_CHARS)
+        if (!validIds || new Set(callIds).size !== callIds.length) return failed("appels d'outils sans identifiant valide")
+
+        // Rejouer TOUS les éléments de sortie dans l'ordre (appels, raisonnement...), tels quels : OpenAI (sans stockage)
+        // et DeepSeek l'exigent pour que le modèle poursuive. Puis répondre à CHAQUE appel, même refusé :
+        // un appel sans résultat correspondant est rejeté par le fournisseur.
+        input.push(...items)
+        for (const [index, call] of calls.entries()) {
+          let output: string
+          if (index >= MAX_TOOL_CALLS_PER_ROUND) {
+            output = JSON.stringify({ ok: false, error: "trop d'appels d'outils dans le même tour" })
+          } else {
+            // L'utilisateur est celui du JWT, jamais une valeur donnée par le modèle.
+            const execution = await executeTicketTool(call.name, call.arguments, user, tickets)
+            output = execution.output
+            if (execution.tool && !toolsUsed.includes(execution.tool)) toolsUsed.push(execution.tool)
+          }
+          input.push({ type: "function_call_output", call_id: call.call_id, output })
         }
-        return { status: "OK", reply }
-      } catch (error) {
-        const timeout = error instanceof Error && error.name === "TimeoutError"
-        console.error(`Assistant IA : appel impossible (${timeout ? "délai dépassé" : "erreur réseau ou réponse illisible"})`)
-        return { status: "PROVIDER_FAILED" }
       }
+      return failed("limite d'appels au fournisseur atteinte")
     },
   }
 }

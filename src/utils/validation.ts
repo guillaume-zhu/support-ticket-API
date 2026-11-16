@@ -20,7 +20,7 @@ export function isValidEmail(email: string) {
 }
 
 // Plus grand entier d'une colonne PostgreSQL de type Int (32 bits)
-const INT32_MAX = 2_147_483_647
+export const INT32_MAX = 2_147_483_647
 
 // Lire un identifiant : entier décimal écrit sous sa forme canonique (pas de "1e2", "0x10", "012", "+5"),
 // entre 1 et INT32_MAX pour correspondre aux colonnes Int ; null s'il est invalide

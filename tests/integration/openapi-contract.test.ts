@@ -274,7 +274,7 @@ describe("Assistant IA : les réponses respectent le contrat", () => {
   it("200, 400, 401, 502 et 503", async () => {
     fetchMock.mockResolvedValueOnce(providerReply("IN_PROGRESS signifie que le ticket est en cours de traitement."))
     const ok = await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 200)
-    expect(ok.body).toEqual({ reply: "IN_PROGRESS signifie que le ticket est en cours de traitement." })
+    expect(ok.body).toEqual({ reply: "IN_PROGRESS signifie que le ticket est en cours de traitement.", toolsUsed: [] })
 
     await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: { messages: [] } }), "post", "/ai/chat", 400)
     await expectContract(call("post", "/ai/chat", { body: question }), "post", "/ai/chat", 401)
@@ -288,6 +288,16 @@ describe("Assistant IA : les réponses respectent le contrat", () => {
     vi.stubEnv("AI_MODEL", "")
     await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 503)
     expect(fetchMock).toHaveBeenCalledTimes(2) // la réponse 200 et la panne 502 seulement
+  })
+
+  it("200 avec consultation d'un ticket : toolsUsed non vide, conforme au contrat", async () => {
+    vi.stubEnv("AI_TICKET_TOOLS", "true")
+    const mine = await prisma.ticket.create({ data: { title: "Ticket de test", description: "Description", createdById: users.USER.id } })
+    const functionCall = { type: "function_call", id: "fc_1", call_id: "call_1", name: "get_ticket", arguments: JSON.stringify({ id: mine.id }) }
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "completed", output: [functionCall] }), { status: 200 }))
+    fetchMock.mockResolvedValueOnce(providerReply("Le ticket est ouvert."))
+    const response = await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 200)
+    expect(response.body).toEqual({ reply: "Le ticket est ouvert.", toolsUsed: ["get_ticket"] })
   })
 })
 

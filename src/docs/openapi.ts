@@ -424,11 +424,11 @@ export const openApiDocument = {
         description: [
           "Envoie une conversation à l'assistant et renvoie sa réponse. L'assistant explique le fonctionnement de l'application et des tickets (statuts, rôles) et propose des pistes de résolution générales ; il refuse poliment les demandes sans rapport avec le support.",
           "",
-          "**À ce stade, l'assistant n'a pas accès aux tickets réels** : il ne peut ni les lire, ni les créer, ni les modifier, et il ne doit rien inventer à leur sujet.",
+          "**Consultation des tickets (optionnelle)** : si le serveur active `AI_TICKET_TOOLS`, l'assistant peut lire les tickets avec deux outils, `list_tickets` et `get_ticket`. Le serveur les exécute avec les droits de l'utilisateur authentifié (un `USER` ne voit que ses tickets), jamais avec ceux que le modèle annonce. Sinon, l'assistant n'a accès à aucun ticket. **Dans tous les cas, il ne peut ni créer, ni modifier, ni clore un ticket.** Le champ `toolsUsed` de la réponse liste les outils que le serveur a exécutés avec succès (voir sa description).",
           "",
           "L'API ne garde aucune mémoire : renvoyer l'historique de la conversation à chaque appel. Seuls les rôles `user` et `assistant` sont acceptés ; les règles de l'assistant sont ajoutées par le serveur et un message `system` est refusé.",
           "",
-          `Les messages sont transmis à un fournisseur d'IA tiers (OpenAI ou DeepSeek) : ne pas y saisir de mot de passe, de jeton ni de donnée personnelle sensible. L'application ne stocke ni ne journalise le contenu des messages ni des réponses ; la conservation éventuelle côté fournisseur dépend de sa politique et de la configuration de son compte. Limité à ${limits.aiPerUser} questions par utilisateur et ${limits.aiGlobal} au total sur 15 minutes.`,
+          `Les messages sont transmis à un fournisseur d'IA tiers (OpenAI ou DeepSeek) : ne pas y saisir de mot de passe, de jeton ni de donnée personnelle sensible. Quand la consultation des tickets est activée, le titre et la description des tickets consultés sont aussi transmis. L'application ne stocke ni ne journalise le contenu des messages, des réponses ni des résultats d'outils ; la conservation éventuelle côté fournisseur dépend de sa politique et de la configuration de son compte. Limité à ${limits.aiPerUser} questions par utilisateur et ${limits.aiGlobal} au total sur 15 minutes.`,
         ].join("\n"),
         roles: ["SUPER_ADMIN", "ADMIN", "AGENT", "USER"],
         requestBody: "ChatRequest",
@@ -551,10 +551,24 @@ export const openApiDocument = {
       },
       ChatResponse: {
         type: "object",
-        properties: { reply: { type: "string", minLength: 1, description: "Réponse de l'assistant." } },
-        required: ["reply"],
+        properties: {
+          reply: { type: "string", minLength: 1, description: "Réponse de l'assistant." },
+          toolsUsed: {
+            type: "array",
+            uniqueItems: true,
+            items: { type: "string", enum: ["list_tickets", "get_ticket"] },
+            description:
+              "Outils que le serveur a exécutés AVEC SUCCÈS pour cette réponse : arguments valides, requête lancée avec les droits de l'utilisateur, résultat transmis au modèle. Un appel simplement proposé par le modèle, refusé (arguments invalides, outil inconnu, trop d'appels) ou en erreur n'y figure pas. Un ticket introuvable ou non accessible compte comme une consultation réussie qui n'a rien trouvé. Vide si aucune consultation n'a abouti. Cela ne prouve pas que la réponse de l'assistant est exacte. Seuls les noms sont indiqués, jamais les arguments ni le contenu.",
+          },
+        },
+        required: ["reply", "toolsUsed"],
         additionalProperties: false,
-        examples: [{ reply: "Le statut IN_PROGRESS signifie que le ticket est pris en charge et en cours de traitement." }],
+        examples: [
+          {
+            reply: "Le ticket 12 « Connexion impossible » est en cours de traitement (statut IN_PROGRESS).",
+            toolsUsed: ["get_ticket"],
+          },
+        ],
       },
       Role: { type: "string", enum: [...ROLES], description: "Rôle d'un compte." },
       UserStatus: {

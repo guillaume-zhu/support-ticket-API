@@ -40,7 +40,7 @@ beforeAll(async () => {
 })
 beforeEach(async () => {
   // Par défaut : assistant non configuré, et tout appel réseau échoue bruyamment.
-  for (const name of ["AI_PROVIDER", "AI_API_KEY", "AI_MODEL", "AI_BASE_URL", "AI_MAX_OUTPUT_TOKENS", "AI_TIMEOUT_MS", "AI_REASONING_EFFORT"]) {
+  for (const name of ["AI_PROVIDER", "AI_API_KEY", "AI_MODEL", "AI_BASE_URL", "AI_MAX_OUTPUT_TOKENS", "AI_TIMEOUT_MS", "AI_REASONING_EFFORT", "AI_TICKET_TOOLS"]) {
     vi.stubEnv(name, "")
   }
   fetchMock.mockReset()
@@ -87,7 +87,7 @@ describe("Réponse nominale", () => {
 
     const response = await chat(user.token, userMessage("  Que signifie IN_PROGRESS ?  "))
     expect(response.status).toBe(200)
-    expect(response.body).toEqual({ reply: "IN_PROGRESS signifie que le ticket est en cours de traitement." })
+    expect(response.body).toEqual({ reply: "IN_PROGRESS signifie que le ticket est en cours de traitement.", toolsUsed: [] })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [calledUrl, init] = fetchMock.mock.calls[0]!
@@ -139,7 +139,7 @@ describe("Réponse nominale", () => {
       const account = await createUser(role)
       fetchMock.mockResolvedValueOnce(providerReply(`réponse ${role}`))
       const response = await chat(account.token, userMessage("Bonjour"))
-      expect(response.body, role).toEqual({ reply: `réponse ${role}` })
+      expect(response.body, role).toEqual({ reply: `réponse ${role}`, toolsUsed: [] })
     }
     expect(fetchMock).toHaveBeenCalledTimes(4)
   })
@@ -163,7 +163,7 @@ describe("Réponse nominale", () => {
     configure()
     const user = await createUser("USER")
     fetchMock.mockResolvedValueOnce(providerReply("Début de la réponse", { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }))
-    expect((await chat(user.token, userMessage("Bonjour"))).body).toEqual({ reply: "Début de la réponse" })
+    expect((await chat(user.token, userMessage("Bonjour"))).body).toEqual({ reply: "Début de la réponse", toolsUsed: [] })
   })
 
   it("plafonne la taille de la réponse renvoyée au client", async () => {
@@ -310,11 +310,18 @@ describe("Confidentialité : rien n'est stocké ni journalisé par l'application
     expect(await prisma.ticket.count()).toBe(0)
   })
 
-  it("n'importe ni Prisma ni le journal d'audit dans le service et le controller IA (contrôle textuel)", () => {
-    for (const file of ["src/services/ai/ai.service.ts", "src/controllers/ai/ai.controller.ts", "src/services/ai/ai.prompt.ts"]) {
+  it("n'accède à la base ni à l'audit autrement que par le service des tickets, en lecture (contrôle textuel)", () => {
+    // Contrôle simple et NON exhaustif des fichiers IA.
+    for (const file of ["src/services/ai/ai.service.ts", "src/controllers/ai/ai.controller.ts", "src/services/ai/ai.tools.ts", "src/services/ai/ai.prompt.ts"]) {
       const source = readFileSync(file, "utf8")
-      expect(source, file).not.toMatch(/prisma|audit\.service|recordAudit/i)
+      expect(source, file).not.toMatch(/audit\.service|recordAudit|\$transaction|\$queryRaw|\$executeRaw/)
+      expect(source, `${file} : accès direct à Prisma`).not.toMatch(/\bprisma\.[a-z]/i)
     }
+    // Les outils n'importent même pas Prisma et n'appellent que les deux fonctions de lecture du service des tickets.
+    const tools = readFileSync("src/services/ai/ai.tools.ts", "utf8")
+    expect(tools).not.toMatch(/PrismaClient|generated\/prisma/)
+    const calls = [...tools.matchAll(/\btickets\.(\w+)\(/g)].map((match) => match[1])
+    expect([...new Set(calls)].sort()).toEqual(["findVisibleById", "listVisible"])
   })
 })
 

@@ -278,14 +278,19 @@ Ajouter une route demande donc de la décrire dans `src/docs/openapi.ts`.
 spécialisé dans le support et l'utilisation de l'application (statuts, rôles, façon
 de formuler un problème, pistes de résolution générales). Il refuse poliment le reste.
 
-**À ce stade, l'assistant n'a accès à aucun ticket** : il ne peut ni les lire, ni les
-créer, ni les modifier, et son message système lui interdit d'en inventer.
+Par défaut, **l'assistant n'a accès à aucun ticket**. Avec `AI_TICKET_TOOLS=true`, il peut
+en **lire** (voir « Consultation des tickets »). Dans tous les cas, il ne peut ni créer,
+ni modifier, ni clore un ticket, et son message système lui interdit d'en inventer.
 
 ```json
 { "messages": [ { "role": "user", "content": "Que signifie le statut IN_PROGRESS ?" } ] }
 ```
 
-Réponse : `{ "reply": "..." }`. L'API est sans mémoire : le client renvoie l'historique à
+Réponse : `{ "reply": "...", "toolsUsed": ["get_ticket"] }`. `toolsUsed` liste les outils
+exécutés **avec succès** par le serveur (arguments valides, requête lancée avec les droits de l'utilisateur,
+résultat transmis au modèle), jamais leurs arguments ni leur contenu. Un appel seulement proposé par le modèle, refusé
+ou en erreur n'y figure pas ; un ticket introuvable ou non accessible y figure (la consultation a eu lieu, sans résultat) ;
+cela ne prouve pas que la réponse est exacte. Vide sans consultation aboutie. L'API est sans mémoire : le client renvoie l'historique à
 chaque appel (20 messages, 2 000 caractères par message et 8 000 au total au maximum).
 Seuls les rôles `user` et `assistant` sont acceptés : les règles de l'assistant sont écrites
 par le serveur (`src/services/ai/ai.prompt.ts`) et un message `system` est refusé.
@@ -305,6 +310,7 @@ Dans `.env` (jamais dans Git) :
 | `AI_MAX_OUTPUT_TOKENS` | optionnel, 2000 par défaut : plafond de TOUS les tokens générés, **raisonnement compris** |
 | `AI_TIMEOUT_MS` | optionnel, 30 000 par défaut : délai maximal avant `502` |
 | `AI_REASONING_EFFORT` | optionnel : `none`, `low`, `medium` ou `high` |
+| `AI_TICKET_TOOLS` | optionnel, `false` par défaut : `true` autorise la consultation des tickets (le contenu des tickets visibles est alors envoyé au fournisseur) |
 
 Sans les trois premières variables, l'assistant est désactivé et la route répond `503`. Une
 configuration incomplète ou invalide arrête le démarrage avec un message qui cite le nom des
@@ -321,20 +327,53 @@ serveur répond alors `502` et l'indique dans ses logs, sans contenu). Pour un a
 support, mieux vaut désactiver le raisonnement quand le modèle le permet
 (`AI_REASONING_EFFORT=none`) ; sinon, augmenter le plafond et le délai.
 
+### Consultation des tickets (`AI_TICKET_TOOLS=true`)
+
+Le modèle ne fait que **proposer** d'appeler une fonction ; c'est le serveur qui exécute
+(`src/services/ai/ai.tools.ts`). Deux outils, en lecture seule, et aucun autre :
+
+| Outil | Rôle |
+| --- | --- |
+| `list_tickets` | tickets visibles de l'utilisateur ; filtres `status`, `q` (recherche **dans les titres**), `page`, `limit`, `sortBy`, `order` ; 10 tickets par appel au maximum (5 par défaut) |
+| `get_ticket` | un ticket visible (titre, description coupée à 1 500 caractères, statut, dates) |
+
+- **Les droits sont ceux de l'utilisateur du JWT**, jamais ceux que le modèle annonce : les outils
+  appellent `ticketsService` (un `USER` ne voit que ses tickets) et n'ont aucun paramètre d'identité.
+  Un ticket inexistant et un ticket non accessible donnent la même réponse.
+- Les arguments proposés par le modèle sont **toujours validés côté serveur**, avec les validateurs de
+  l'API (`parseTicketListQuery`, `parseId`) : champ inconnu, type ou valeur invalide = erreur renvoyée
+  au modèle, sans accès à la base. `strict: false` est déclaré explicitement chez OpenAI ; chez DeepSeek
+  le champ n'est pas documenté pour ce format et est omis (même effet).
+- Les résultats ne contiennent ni auteur ni email. Le titre et la description des tickets sont du
+  **texte écrit par des utilisateurs** : donnée non fiable, jamais une instruction. Le résultat le rappelle
+  et le message système interdit d'obéir à un ticket. Comme les outils sont en lecture seule et
+  s'exécutent avec les droits de l'appelant, un ticket piégé ne peut rien faire de plus.
+- **Boucle bornée** : 3 appels au fournisseur par requête (2 tours d'outils puis la réponse), 4 appels
+  d'outils par tour (les suivants reçoivent une erreur), résultat de 6 000 caractères au maximum,
+  60 secondes au total. Une limite atteinte, une réponse incomplète pendant un appel d'outil ou un
+  identifiant d'appel invalide donnent `502` : **aucune réussite n'est inventée** et aucun outil n'est
+  exécuté dans ces cas. Une panne de base de données donne `500`.
+- Les éléments renvoyés par le modèle (appels, raisonnement) sont rejoués tels quels à l'appel suivant,
+  comme l'exigent OpenAI (sans stockage) et DeepSeek ; ils ne sont ni renvoyés au client ni journalisés.
+  Avec un modèle qui raisonne, `AI_REASONING_EFFORT=none` simplifie le rejeu quand le modèle l'accepte.
+
 ### Coûts
 
 Chaque question est facturée par le fournisseur. Le serveur limite à 30 questions par
 utilisateur et 300 au total par 15 minutes (`src/middlewares/rate-limit.ts`), plafonne la
-taille des messages et de la réponse, et ne relance jamais un appel. Ces compteurs sont en
+taille des messages et de la réponse, et ne relance jamais un appel. Ces limites comptent les
+requêtes HTTP : avec la consultation des tickets, une requête peut coûter jusqu'à 3 appels au
+fournisseur, avec le texte des tickets lus en plus. Ces compteurs sont en
 mémoire : **ce n'est pas un plafond de dépense ferme**. Fixer aussi un budget maximal dans le
 tableau de bord du fournisseur.
 
 ### Confidentialité
 
-L'application ne stocke ni ne journalise le contenu des messages ni des réponses, et n'envoie au
-fournisseur aucune donnée d'identité (ni email, ni identifiant, ni rôle). Les messages sont
-néanmoins **transmis à un tiers** : ne pas y saisir de mot de passe, de jeton ni de donnée
-personnelle sensible. D'après la documentation officielle consultée le 16 novembre 2026 (à
+L'application ne stocke ni ne journalise le contenu des messages, des réponses ni des résultats
+d'outils, et n'envoie au fournisseur aucune donnée d'identité (ni email, ni identifiant, ni rôle).
+Les messages sont néanmoins **transmis à un tiers** : ne pas y saisir de mot de passe, de jeton ni
+de donnée personnelle sensible. **Avec `AI_TICKET_TOOLS=true`, le titre et la description des tickets
+consultés sont aussi transmis** : activer cette option engage cette décision de confidentialité. D'après la documentation officielle consultée le 16 novembre 2026 (à
 revérifier, elle évolue) :
 
 - **OpenAI** : les données envoyées à l'API ne servent pas à l'entraînement par défaut ;
@@ -352,8 +391,8 @@ Rien ici ne garantit l'absence de conservation côté fournisseur.
 
 ### Tests
 
-Les tests automatisés remplacent `fetch` par un faux fournisseur : aucun appel réseau, aucune clé
-réelle (`npm test` vide les variables `AI_*`). Le comportement du modèle lui-même (refus du
+Les tests automatisés remplacent `fetch` par un faux fournisseur, parfois scripté pour rejouer une
+conversation d'outils : aucun appel réseau, aucune clé réelle (`npm test` vide les variables `AI_*`). Le comportement du modèle lui-même (refus du
 hors-sujet, respect du message système) ne peut être vérifié que par un **test manuel** avec une
 vraie clé, à lancer volontairement.
 
