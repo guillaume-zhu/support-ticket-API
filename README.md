@@ -283,18 +283,23 @@ en **lire** (voir « Consultation des tickets »). Dans tous les cas, il ne peut
 ni modifier, ni clore un ticket, et son message système lui interdit d'en inventer.
 
 ```json
-{ "messages": [ { "role": "user", "content": "Que signifie le statut IN_PROGRESS ?" } ] }
+{ "message": "Que signifie le statut IN_PROGRESS ?" }
 ```
 
-Réponse : `{ "reply": "...", "toolsUsed": ["get_ticket"] }`. `toolsUsed` liste les outils
+Pour poursuivre une conversation, ajouter son identifiant : `{ "conversationId": "<uuid>", "message": "Et pour CLOSED ?" }`.
+**Le client n'envoie que son nouveau message** : le serveur retrouve l'historique dans PostgreSQL (voir « Conversations
+enregistrées »).
+
+Réponse : `{ "conversationId": "...", "reply": "...", "toolsUsed": ["get_ticket"] }`. `toolsUsed` liste les outils
 exécutés **avec succès** par le serveur (arguments valides, requête lancée avec les droits de l'utilisateur,
 résultat transmis au modèle), jamais leurs arguments ni leur contenu. Un appel seulement proposé par le modèle, refusé
 ou en erreur n'y figure pas ; un ticket introuvable ou non accessible y figure (la consultation a eu lieu, sans résultat) ;
-cela ne prouve pas que la réponse est exacte. Vide sans consultation aboutie. L'API est sans mémoire : le client renvoie l'historique à
-chaque appel (20 messages, 2 000 caractères par message et 8 000 au total au maximum).
-Seuls les rôles `user` et `assistant` sont acceptés : les règles de l'assistant sont écrites
-par le serveur (`src/services/ai/ai.prompt.ts`) et un message `system` est refusé.
-Erreurs : `400` conversation invalide, `401`, `429`, `502` fournisseur indisponible,
+cela ne prouve pas que la réponse est exacte. Vide sans consultation aboutie.
+Un message fait 2 000 caractères au maximum. Le client **ne peut envoyer ni rôle, ni historique, ni résultat d'outil** :
+un champ `messages`, `role` ou `system` est refusé, et les règles de l'assistant sont écrites par le serveur
+(`src/services/ai/ai.prompt.ts`).
+Erreurs : `400` requête invalide, `401`, `404` conversation introuvable (absente ou à un autre utilisateur, indiscernables),
+`409` conversation pleine ou trop de conversations, `429`, `502` fournisseur indisponible (rien n'est enregistré),
 `503` assistant non configuré.
 
 ### Configuration
@@ -310,6 +315,7 @@ Dans `.env` (jamais dans Git) :
 | `AI_MAX_OUTPUT_TOKENS` | optionnel, 2000 par défaut : plafond de TOUS les tokens générés, **raisonnement compris** |
 | `AI_TIMEOUT_MS` | optionnel, 30 000 par défaut : délai maximal avant `502` |
 | `AI_REASONING_EFFORT` | optionnel : `none`, `low`, `medium` ou `high` |
+| `AI_CONVERSATION_RETENTION_DAYS` | optionnel, `90` par défaut : jours d'inactivité avant le nettoyage d'une conversation (utilisé par la tâche planifiée, voir « Nettoyage quotidien ») |
 | `AI_TICKET_TOOLS` | optionnel, `false` par défaut : `true` autorise la consultation des tickets (le contenu des tickets visibles est alors envoyé au fournisseur) |
 
 Sans les trois premières variables, l'assistant est désactivé et la route répond `503`. Une
@@ -326,6 +332,76 @@ réponse, et ils comptent dans `AI_MAX_OUTPUT_TOKENS` : trop bas, la réponse ar
 serveur répond alors `502` et l'indique dans ses logs, sans contenu). Pour un assistant de
 support, mieux vaut désactiver le raisonnement quand le modèle le permet
 (`AI_REASONING_EFFORT=none`) ; sinon, augmenter le plafond et le délai.
+
+### Conversations enregistrées
+
+Chaque échange est enregistré dans PostgreSQL (`AiConversation` et `AiMessage`) : le texte de l'utilisateur et
+la **réponse finale** de l'assistant, avec les noms des outils utilisés. Les appels de fonctions, leurs résultats et le
+raisonnement du modèle ne sont **jamais** stockés. Le contenu est stocké **en clair** (pas de chiffrement applicatif) et
+n'est jamais journalisé ni copié dans le journal d'audit.
+
+| Route | Rôle |
+| --- | --- |
+| `POST /ai/chat` | démarre une conversation, ou la poursuit avec `conversationId` |
+| `GET /ai/conversations` | mes conversations, de la plus récemment active à la plus ancienne (paginé) |
+| `GET /ai/conversations/:id/messages` | l'historique d'une de mes conversations, du plus ancien au plus récent (paginé) |
+| `DELETE /ai/conversations/:id` | supprime **immédiatement** une de mes conversations et ses messages |
+
+- **Chacun ne voit que ses conversations**, quel que soit son rôle (SUPER_ADMIN compris). Une conversation absente et la
+  conversation d'un autre donnent le même `404`. L'identité vient du JWT ; ouvrir une conversation ne donne **aucun droit** sur
+  les tickets : les outils s'exécutent toujours avec les droits actuels de l'utilisateur.
+- **Fenêtre de contexte** : à chaque question, seuls les 20 derniers messages au plus (12 000 caractères) sont envoyés au
+  fournisseur, le nouveau message toujours compris. Les plus anciens restent consultables mais ne sont plus transmis.
+- **Quotas** : 30 conversations par utilisateur et 100 messages par conversation (`409` au-delà, sans appeler le
+  fournisseur). Ils sont revérifiés dans la transaction d'enregistrement, sous un verrou PostgreSQL court propre à
+  l'utilisateur : ils tiennent même si plusieurs requêtes arrivent en même temps.
+- **Enregistrement après succès** : le message de l'utilisateur et la réponse sont écrits ensemble, en une transaction, une
+  fois la réponse obtenue. Un échec du fournisseur (`502`) ne laisse rien en base.
+- **Rétrogradation d'un compte (limite assumée).** Une réponse de l'assistant peut résumer des tickets : elle reste dans
+  la conversation de celui qui l'a demandée, même si ses droits baissent ensuite (AGENT vers USER, par exemple). Les outils
+  appliquent toujours ses droits ACTUELS, mais son ancien texte reste lisible par lui. Aucun code ne modifie un rôle après la
+  création du compte : une rétrogradation se fait aujourd'hui par modification directe de la base. **Procédure à appliquer
+  en même temps** : supprimer ses conversations (les messages partent par cascade).
+
+  ```sql
+  DELETE FROM "AiConversation" WHERE "userId" = <id du compte>;
+  ```
+
+  Le jour où un endpoint de changement de rôle sera ajouté, cette suppression devra être faite dans la même transaction.
+- **Requêtes simultanées dans une même conversation.** Aucune corruption : chaque échange (question et réponse) est
+  enregistré en bloc dans une transaction, sous un verrou propre à l'utilisateur ; chaque réponse reste appariée à sa question,
+  et les quotas tiennent (30 conversations, 100 messages). Deux limites assumées : (1) les requêtes simultanées lisent le même
+  historique, donc la seconde ne tient pas compte de la première ; l'ordre final suit l'ordre d'enregistrement ; (2) les
+  contrôles rapides faits avant l'appel au fournisseur peuvent laisser passer plusieurs requêtes, dont l'enregistrement est
+  ensuite refusé (`409`) : le fournisseur a alors été appelé, mais jamais plus d'une fois par requête, et le quota par
+  utilisateur borne ce coût.
+
+#### Nettoyage quotidien
+
+Une conversation est supprimée quand sa **dernière activité** (dernier échange enregistré) remonte à plus de
+`AI_CONVERSATION_RETENTION_DAYS` jours (90 par défaut). Ses messages partent avec elle (cascade PostgreSQL). Il n'y a
+**ni statut d'expiration, ni archivage, ni vérification à chaque lecture** : une tâche planifiée indépendante du serveur
+fait le ménage.
+
+```bash
+npm run ai:purge-conversations              # supprime
+npm run ai:purge-conversations -- --dry-run # compte sans rien supprimer
+```
+
+La tâche n'affiche que des compteurs, jamais de contenu. Pour un futur hébergement, à lancer **une fois par jour** par
+cron, avec les variables d'environnement du serveur (`DATABASE_URL`, éventuellement `AI_CONVERSATION_RETENTION_DAYS`),
+hors des heures de pointe. Exemple de ligne de crontab (tous les jours à 03h15) :
+
+```cron
+15 3 * * * cd /chemin/vers/support-ticket && npm run ai:purge-conversations >> /var/log/support-ticket-purge.log 2>&1
+```
+
+Sur un serveur sans dépendances de développement, utiliser la version compilée (`npm run build` d'abord) :
+`node dist/jobs/purge-ai-conversations.js`. Aucun service de déploiement n'est fourni à ce stade.
+
+**Limite assumée** : tant que la tâche n'est pas passée, une conversation reste lisible, même après ses 90 jours
+d'inactivité (potentiellement jusqu'à environ 24 heures de plus, ou davantage si la tâche échoue ou n'est pas configurée).
+Le seul moyen de suppression immédiate est `DELETE /ai/conversations/:id`.
 
 ### Consultation des tickets (`AI_TICKET_TOOLS=true`)
 
@@ -369,8 +445,9 @@ tableau de bord du fournisseur.
 
 ### Confidentialité
 
-L'application ne stocke ni ne journalise le contenu des messages, des réponses ni des résultats
-d'outils, et n'envoie au fournisseur aucune donnée d'identité (ni email, ni identifiant, ni rôle).
+L'application **enregistre** les conversations en base (voir « Conversations enregistrées »), mais ne journalise jamais
+le contenu des messages, des réponses ni des résultats d'outils (ces derniers ne sont même pas stockés), et n'envoie au
+fournisseur aucune donnée d'identité (ni email, ni identifiant, ni rôle).
 Les messages sont néanmoins **transmis à un tiers** : ne pas y saisir de mot de passe, de jeton ni
 de donnée personnelle sensible. **Avec `AI_TICKET_TOOLS=true`, le titre et la description des tickets
 consultés sont aussi transmis** : activer cette option engage cette décision de confidentialité. D'après la documentation officielle consultée le 16 novembre 2026 (à

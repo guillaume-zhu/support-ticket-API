@@ -189,7 +189,7 @@ describe("Aucune entrée hostile ne provoque de 500", () => {
     { method: "post", path: "/users", role: "SUPER_ADMIN", base: { email: "nouveau@example.invalid", role: "USER" } },
     { method: "post", path: "/tickets", role: "USER", base: { title: "titre", description: "description" } },
     { method: "patch", path: "/tickets/1/status", role: "AGENT", base: { status: "OPEN" } },
-    { method: "post", path: "/ai/chat", role: "USER", base: { messages: [{ role: "user", content: "Bonjour" }] } },
+    { method: "post", path: "/ai/chat", role: "USER", base: { message: "Bonjour" } },
   ]
 
   it("répond toujours 4xx ou 2xx (jamais 5xx) à des valeurs hostiles dans chaque champ", async () => {
@@ -200,7 +200,9 @@ describe("Aucune entrée hostile ne provoque de 500", () => {
         for (const value of hostileValues) {
           const req = request(app)[endpoint.method](endpoint.path)
           const response = await (endpoint.role ? req.set(as(endpoint.role)) : req).send({ ...endpoint.base, [field]: value })
-          if (response.status >= 500) {
+          // 503 « assistant non configuré » est la réponse normale d'un texte valide quand l'assistant n'est pas configuré.
+          const expectedUnavailable = endpoint.path === "/ai/chat" && response.status === 503
+          if (response.status >= 500 && !expectedUnavailable) {
             serverErrors.push(`${endpoint.method.toUpperCase()} ${endpoint.path} ${field}=${JSON.stringify(value)?.slice(0, 30)} → ${response.status}`)
           }
         }

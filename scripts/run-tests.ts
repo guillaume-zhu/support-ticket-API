@@ -24,6 +24,7 @@ const env = {
   AI_TIMEOUT_MS: "",
   AI_REASONING_EFFORT: "",
   AI_TICKET_TOOLS: "",
+  AI_CONVERSATION_RETENTION_DAYS: "",
 }
 
 // Migrer uniquement la base de test validée avant de démarrer Vitest.

@@ -66,7 +66,7 @@ const lastEmailedCode = () =>
 
 const succeeded = new Set<string>()
 
-function call(method: "get" | "post" | "patch", path: string, options: { token?: string; body?: object } = {}) {
+function call(method: "get" | "post" | "patch" | "delete", path: string, options: { token?: string; body?: object } = {}) {
   let req = request(app)[method](path)
   if (options.token) req = req.set("Authorization", `Bearer ${options.token}`)
   return options.body === undefined ? req : req.send(options.body)
@@ -75,7 +75,7 @@ function call(method: "get" | "post" | "patch", path: string, options: { token?:
 // `template` est le chemin du contrat (ex. /tickets/{id}), `path` l'URL réellement appelée.
 async function expectContract(
   pending: PromiseLike<request.Response>,
-  method: "get" | "post" | "patch",
+  method: "get" | "post" | "patch" | "delete",
   template: string,
   status: number,
 ) {
@@ -254,7 +254,7 @@ describe("Journal d'audit : les réponses respectent le contrat", () => {
 describe("Assistant IA : les réponses respectent le contrat", () => {
   const providerReply = (text: string) =>
     new Response(JSON.stringify({ status: "completed", error: null, output: [{ type: "message", content: [{ type: "output_text", text }] }] }), { status: 200 })
-  const question = { messages: [{ role: "user", content: "Que signifie IN_PROGRESS ?" }] }
+  const question = { message: "Que signifie IN_PROGRESS ?" }
   const fetchMock = vi.fn()
 
   beforeEach(() => {
@@ -271,13 +271,21 @@ describe("Assistant IA : les réponses respectent le contrat", () => {
     vi.unstubAllGlobals()
   })
 
-  it("200, 400, 401, 502 et 503", async () => {
+  it("200, 400, 401, 404, 409, 502 et 503", async () => {
     fetchMock.mockResolvedValueOnce(providerReply("IN_PROGRESS signifie que le ticket est en cours de traitement."))
     const ok = await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 200)
-    expect(ok.body).toEqual({ reply: "IN_PROGRESS signifie que le ticket est en cours de traitement.", toolsUsed: [] })
+    expect(ok.body).toEqual({ conversationId: expect.any(String), reply: "IN_PROGRESS signifie que le ticket est en cours de traitement.", toolsUsed: [] })
 
-    await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: { messages: [] } }), "post", "/ai/chat", 400)
+    await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: { message: "" } }), "post", "/ai/chat", 400)
     await expectContract(call("post", "/ai/chat", { body: question }), "post", "/ai/chat", 401)
+    // Poursuivre MA conversation : 200 ; celle d'un autre : 404 ; conversation pleine : 409 (sans appel au fournisseur).
+    fetchMock.mockResolvedValueOnce(providerReply("Et CLOSED signifie que le ticket est terminé."))
+    await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: { message: "Et pour CLOSED ?", conversationId: ok.body.conversationId } }), "post", "/ai/chat", 200)
+    await expectContract(call("post", "/ai/chat", { token: bearer("AGENT"), body: { message: "Intrus", conversationId: ok.body.conversationId } }), "post", "/ai/chat", 404)
+    await prisma.aiMessage.createMany({
+      data: Array.from({ length: 96 }, (_, index) => ({ conversationId: ok.body.conversationId, role: index % 2 === 0 ? ("USER" as const) : ("ASSISTANT" as const), content: "remplissage" })),
+    })
+    await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: { message: "Trop", conversationId: ok.body.conversationId } }), "post", "/ai/chat", 409)
 
     vi.spyOn(console, "error").mockImplementation(() => {})
     fetchMock.mockResolvedValueOnce(new Response("erreur", { status: 500 }))
@@ -287,7 +295,7 @@ describe("Assistant IA : les réponses respectent le contrat", () => {
     vi.stubEnv("AI_PROVIDER", "")
     vi.stubEnv("AI_MODEL", "")
     await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 503)
-    expect(fetchMock).toHaveBeenCalledTimes(2) // la réponse 200 et la panne 502 seulement
+    expect(fetchMock).toHaveBeenCalledTimes(3) // les deux réponses 200 et la panne 502 seulement
   })
 
   it("200 avec consultation d'un ticket : toolsUsed non vide, conforme au contrat", async () => {
@@ -297,7 +305,42 @@ describe("Assistant IA : les réponses respectent le contrat", () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "completed", output: [functionCall] }), { status: 200 }))
     fetchMock.mockResolvedValueOnce(providerReply("Le ticket est ouvert."))
     const response = await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 200)
-    expect(response.body).toEqual({ reply: "Le ticket est ouvert.", toolsUsed: ["get_ticket"] })
+    expect(response.body).toEqual({ conversationId: expect.any(String), reply: "Le ticket est ouvert.", toolsUsed: ["get_ticket"] })
+  })
+})
+
+describe("Conversations enregistrées : les réponses respectent le contrat", () => {
+  const stubProvider = () => {
+    for (const [name, value] of Object.entries({ AI_PROVIDER: "openai", AI_API_KEY: "test-key-not-a-real-secret-1234", AI_MODEL: "test-model" })) vi.stubEnv(name, value)
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Réponse." }] }] }), { status: 200 })))
+  }
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  it("liste, historique et suppression", async () => {
+    stubProvider()
+    const first = await call("post", "/ai/chat", { token: bearer("USER"), body: { message: "Première question" } })
+    const id = first.body.conversationId as string
+    await call("post", "/ai/chat", { token: bearer("USER"), body: { message: "Deuxième question", conversationId: id } })
+
+    const list = await expectContract(call("get", "/ai/conversations", { token: bearer("USER") }), "get", "/ai/conversations", 200)
+    expect(list.body.data).toEqual([expect.objectContaining({ id, title: "Première question", messageCount: 4 })])
+    await expectContract(call("get", "/ai/conversations?limit=0", { token: bearer("USER") }), "get", "/ai/conversations", 400)
+    await expectContract(call("get", "/ai/conversations"), "get", "/ai/conversations", 401)
+
+    const history = await expectContract(call("get", `/ai/conversations/${id}/messages`, { token: bearer("USER") }), "get", "/ai/conversations/{id}/messages", 200)
+    expect(history.body.data.map((message: { role: string }) => message.role)).toEqual(["user", "assistant", "user", "assistant"])
+    await expectContract(call("get", "/ai/conversations/pas-un-uuid/messages", { token: bearer("USER") }), "get", "/ai/conversations/{id}/messages", 400)
+    await expectContract(call("get", `/ai/conversations/${id}/messages`), "get", "/ai/conversations/{id}/messages", 401)
+    await expectContract(call("get", `/ai/conversations/${id}/messages`, { token: bearer("SUPER_ADMIN") }), "get", "/ai/conversations/{id}/messages", 404)
+
+    await expectContract(call("delete", `/ai/conversations/${id}`, { token: bearer("AGENT") }), "delete", "/ai/conversations/{id}", 404)
+    await expectContract(call("delete", "/ai/conversations/abc", { token: bearer("USER") }), "delete", "/ai/conversations/{id}", 400)
+    await expectContract(call("delete", `/ai/conversations/${id}`), "delete", "/ai/conversations/{id}", 401)
+    await expectContract(call("delete", `/ai/conversations/${id}`, { token: bearer("USER") }), "delete", "/ai/conversations/{id}", 204)
+    expect(await prisma.aiMessage.count()).toBe(0)
   })
 })
 
@@ -329,7 +372,7 @@ describe("Erreurs communes : 429 et 500 respectent le contrat", () => {
 describe("Les rôles documentés sont les rôles réellement appliqués", () => {
   it("chaque opération autorise exactement les rôles de x-roles", async () => {
     const operations = listOperations(contract)
-    expect(operations.length).toBe(16)
+    expect(operations.length).toBe(19)
     for (const { method, path, op } of operations) {
       // Appel sans effet de bord : id inexistant, body vide (rejeté ou sans cible).
       const url = path.replace("{id}", "999999")
@@ -356,7 +399,7 @@ describe("Couverture : chaque opération du contrat a été exercée", () => {
   // S'appuie sur les tests ci-dessus, exécutés dans l'ordre du fichier : chaque opération doit avoir
   // reçu au moins une vraie réponse de succès conforme au contrat. Une route documentée mais absente
   // (qui répondrait 404) est donc détectée ici.
-  it("a obtenu une réponse de succès pour les 16 opérations", () => {
+  it("a obtenu une réponse de succès pour les 19 opérations", () => {
     const expected = listOperations(contract).map(({ method, path }) => `${method} ${path}`).sort()
     expect([...succeeded].sort()).toEqual(expected)
   })

@@ -3,10 +3,13 @@ import { ACTION_TOKEN_LENGTH, PASSWORD_MIN_LENGTH } from "../utils/credentials.j
 import { MAX_JWT_LENGTH } from "../utils/jwt.js"
 import {
   AUDIT_ACTIONS,
-  CHAT_MAX_MESSAGES,
   CHAT_MESSAGE_MAX_LENGTH,
   CHAT_ROLES,
-  CHAT_TOTAL_MAX_LENGTH,
+  CONVERSATION_CONTEXT_MAX_CHARS,
+  CONVERSATION_CONTEXT_MAX_MESSAGES,
+  CONVERSATION_MAX_MESSAGES,
+  CONVERSATION_MAX_PER_USER,
+  CONVERSATION_RETENTION_DEFAULT_DAYS,
   EMAIL_MAX_LENGTH,
   MAX_PAGE,
   MAX_PAGE_SIZE,
@@ -85,20 +88,32 @@ const idParameter = (name: string, description: string) => ({
   schema: { type: "integer", minimum: 1, maximum: INT32_MAX, examples: [12] },
 })
 
-const pageParameters = [
-  {
-    name: "page",
-    in: "query",
-    description: `Numéro de page (1 à ${MAX_PAGE}).`,
-    schema: { type: "integer", minimum: 1, maximum: MAX_PAGE, default: 1 },
-  },
-  {
-    name: "limit",
-    in: "query",
-    description: `Éléments par page (1 à ${MAX_PAGE_SIZE}).`,
-    schema: { type: "integer", minimum: 1, maximum: MAX_PAGE_SIZE, default: 20 },
-  },
-]
+const pageParameters = pageParametersWithDefault(20)
+
+function pageParametersWithDefault(defaultLimit: number) {
+  return [
+    {
+      name: "page",
+      in: "query",
+      description: `Numéro de page (1 à ${MAX_PAGE}).`,
+      schema: { type: "integer", minimum: 1, maximum: MAX_PAGE, default: 1 },
+    },
+    {
+      name: "limit",
+      in: "query",
+      description: `Éléments par page (1 à ${MAX_PAGE_SIZE}).`,
+      schema: { type: "integer", minimum: 1, maximum: MAX_PAGE_SIZE, default: defaultLimit },
+    },
+  ]
+}
+
+const conversationIdParameter = {
+  name: "id",
+  in: "path",
+  required: true,
+  description: "Identifiant de la conversation (uuid).",
+  schema: { type: "string", format: "uuid" },
+}
 
 const QUERY_NOTE =
   "Un paramètre inconnu, répété ou invalide renvoie `400`. Une page au-delà de la dernière renvoie `200` avec `data` vide."
@@ -422,22 +437,76 @@ export const openApiDocument = {
         operationId: "chatWithAssistant",
         summary: "Poser une question à l'assistant IA",
         description: [
-          "Envoie une conversation à l'assistant et renvoie sa réponse. L'assistant explique le fonctionnement de l'application et des tickets (statuts, rôles) et propose des pistes de résolution générales ; il refuse poliment les demandes sans rapport avec le support.",
+          "Envoie **un nouveau message** à l'assistant et renvoie sa réponse. Sans `conversationId`, une nouvelle conversation est créée ; avec le `conversationId` d'une de vos conversations, l'échange la poursuit : **le serveur retrouve l'historique lui-même**, le client n'envoie que son nouveau message.",
+          "",
+          "L'assistant explique le fonctionnement de l'application et des tickets (statuts, rôles) et propose des pistes de résolution générales ; il refuse poliment les demandes sans rapport avec le support.",
           "",
           "**Consultation des tickets (optionnelle)** : si le serveur active `AI_TICKET_TOOLS`, l'assistant peut lire les tickets avec deux outils, `list_tickets` et `get_ticket`. Le serveur les exécute avec les droits de l'utilisateur authentifié (un `USER` ne voit que ses tickets), jamais avec ceux que le modèle annonce. Sinon, l'assistant n'a accès à aucun ticket. **Dans tous les cas, il ne peut ni créer, ni modifier, ni clore un ticket.** Le champ `toolsUsed` de la réponse liste les outils que le serveur a exécutés avec succès (voir sa description).",
           "",
-          "L'API ne garde aucune mémoire : renvoyer l'historique de la conversation à chaque appel. Seuls les rôles `user` et `assistant` sont acceptés ; les règles de l'assistant sont ajoutées par le serveur et un message `system` est refusé.",
+          `Seuls le texte de votre message et la réponse finale de l'assistant sont enregistrés (jamais les appels d'outils, leurs résultats ni le raisonnement du modèle). Les conversations ne sont lisibles que par leur propriétaire, vous pouvez les supprimer à tout moment, et elles sont supprimées automatiquement après ${CONVERSATION_RETENTION_DEFAULT_DAYS} jours (par défaut) sans activité, lors d'un nettoyage quotidien : une conversation peut donc rester accessible quelques heures après ce délai. Chaque requête envoie au fournisseur les ${CONVERSATION_CONTEXT_MAX_MESSAGES} derniers messages au plus (${CONVERSATION_CONTEXT_MAX_CHARS} caractères) ; les plus anciens restent consultables mais ne sont plus transmis. Limites : ${CONVERSATION_MAX_PER_USER} conversations par utilisateur et ${CONVERSATION_MAX_MESSAGES} messages par conversation.`,
           "",
-          `Les messages sont transmis à un fournisseur d'IA tiers (OpenAI ou DeepSeek) : ne pas y saisir de mot de passe, de jeton ni de donnée personnelle sensible. Quand la consultation des tickets est activée, le titre et la description des tickets consultés sont aussi transmis. L'application ne stocke ni ne journalise le contenu des messages, des réponses ni des résultats d'outils ; la conservation éventuelle côté fournisseur dépend de sa politique et de la configuration de son compte. Limité à ${limits.aiPerUser} questions par utilisateur et ${limits.aiGlobal} au total sur 15 minutes.`,
+          `Les messages sont transmis à un fournisseur d'IA tiers (OpenAI ou DeepSeek) : ne pas y saisir de mot de passe, de jeton ni de donnée personnelle sensible. Quand la consultation des tickets est activée, le titre et la description des tickets consultés sont aussi transmis. L'application ne journalise jamais le contenu des messages, des réponses ni des résultats d'outils ; la conservation éventuelle côté fournisseur dépend de sa politique et de la configuration de son compte. Limité à ${limits.aiPerUser} questions par utilisateur et ${limits.aiGlobal} au total sur 15 minutes.`,
         ].join("\n"),
         roles: ["SUPER_ADMIN", "ADMIN", "AGENT", "USER"],
         requestBody: "ChatRequest",
         responses: {
-          "200": { description: "Réponse de l'assistant.", content: json(ref("ChatResponse")) },
-          "400": errorResponse("Conversation invalide (rôle, taille, nombre de messages, champ inconnu, dernier message qui ne vient pas de l'utilisateur)."),
+          "200": { description: "Réponse de l'assistant, enregistrée dans la conversation.", content: json(ref("ChatResponse")) },
+          "400": errorResponse("Message ou conversationId invalide, champ inconnu (l'historique, les rôles et les résultats d'outils ne peuvent pas être envoyés)."),
           "401": errorResponse("Authentification requise."),
-          "502": errorResponse("Le fournisseur d'IA a échoué (clé refusée, quota, délai dépassé, réponse inutilisable). Aucun détail du fournisseur n'est transmis."),
+          "404": errorResponse("Conversation introuvable (inexistante, ou appartenant à un autre utilisateur : les deux cas sont indiscernables)."),
+          "409": errorResponse("Conversation pleine, ou trop de conversations : en supprimer une. Le fournisseur n'est pas appelé."),
+          "502": errorResponse("Le fournisseur d'IA a échoué (clé refusée, quota, délai dépassé, réponse inutilisable). Aucun détail du fournisseur n'est transmis et rien n'est enregistré."),
           "503": errorResponse("Assistant non configuré sur ce serveur."),
+        },
+      }),
+    },
+    "/ai/conversations": {
+      get: operation({
+        tag: "Assistant",
+        operationId: "listConversations",
+        summary: "Lister mes conversations avec l'assistant",
+        description:
+          "Renvoie vos conversations, de la plus récemment active à la plus ancienne. Un utilisateur ne voit que les siennes, quel que soit son rôle (y compris SUPER_ADMIN). Un paramètre inconnu, répété ou invalide renvoie `400`.",
+        roles: ["SUPER_ADMIN", "ADMIN", "AGENT", "USER"],
+        parameters: pageParametersWithDefault(20),
+        responses: {
+          "200": { description: "Page de conversations.", content: json(ref("ConversationPage")) },
+          "400": errorResponse("Paramètre de query invalide, inconnu ou répété."),
+          "401": errorResponse("Authentification requise."),
+        },
+      }),
+    },
+    "/ai/conversations/{id}/messages": {
+      get: operation({
+        tag: "Assistant",
+        operationId: "listConversationMessages",
+        summary: "Relire l'historique d'une conversation",
+        description:
+          "Renvoie les messages d'une de vos conversations, du plus ancien au plus récent (texte de l'utilisateur et réponses finales de l'assistant). Une conversation inexistante ou appartenant à un autre utilisateur renvoie le même `404`.",
+        roles: ["SUPER_ADMIN", "ADMIN", "AGENT", "USER"],
+        parameters: [conversationIdParameter, ...pageParametersWithDefault(50)],
+        responses: {
+          "200": { description: "Page de messages.", content: json(ref("ConversationMessagePage")) },
+          "400": errorResponse("Identifiant ou paramètre de query invalide."),
+          "401": errorResponse("Authentification requise."),
+          "404": errorResponse("Conversation introuvable (inexistante ou appartenant à un autre utilisateur)."),
+        },
+      }),
+    },
+    "/ai/conversations/{id}": {
+      delete: operation({
+        tag: "Assistant",
+        operationId: "deleteConversation",
+        summary: "Supprimer une conversation",
+        description:
+          "Supprime immédiatement une de vos conversations et tous ses messages. Aucun archivage : la suppression est définitive.",
+        roles: ["SUPER_ADMIN", "ADMIN", "AGENT", "USER"],
+        parameters: [conversationIdParameter],
+        responses: {
+          "204": { description: "Conversation et messages supprimés. Réponse sans corps." },
+          "400": errorResponse("Identifiant invalide."),
+          "401": errorResponse("Authentification requise."),
+          "404": errorResponse("Conversation introuvable (inexistante ou appartenant à un autre utilisateur)."),
         },
       }),
     },
@@ -519,39 +588,29 @@ export const openApiDocument = {
         additionalProperties: false,
         examples: [{ message: "Invitation transmise" }],
       },
-      ChatMessage: {
-        type: "object",
-        properties: {
-          role: { type: "string", enum: [...CHAT_ROLES], description: "Auteur du message : l'utilisateur ou l'assistant." },
-          content: {
-            type: "string",
-            minLength: 1,
-            maxLength: CHAT_MESSAGE_MAX_LENGTH,
-            description: "Texte du message, sans caractères de contrôle (retours à la ligne permis).",
-          },
-        },
-        required: ["role", "content"],
-        additionalProperties: false,
-        examples: [{ role: "user", content: "Que signifie le statut IN_PROGRESS ?" }],
-      },
       ChatRequest: {
         type: "object",
         properties: {
-          messages: {
-            type: "array",
-            minItems: 1,
-            maxItems: CHAT_MAX_MESSAGES,
-            items: ref("ChatMessage"),
-            description: `Conversation, du plus ancien au plus récent ; le dernier message doit être de l'utilisateur. ${CHAT_TOTAL_MAX_LENGTH} caractères au total au maximum.`,
+          message: {
+            type: "string",
+            minLength: 1,
+            maxLength: CHAT_MESSAGE_MAX_LENGTH,
+            description: "Votre nouveau message, sans caractères de contrôle (retours à la ligne permis).",
+          },
+          conversationId: {
+            type: "string",
+            format: "uuid",
+            description: "Conversation à poursuivre (l'une des vôtres). Omis : une nouvelle conversation est créée.",
           },
         },
-        required: ["messages"],
+        required: ["message"],
         additionalProperties: false,
-        examples: [{ messages: [{ role: "user", content: "Que signifie le statut IN_PROGRESS ?" }] }],
+        examples: [{ message: "Que signifie le statut IN_PROGRESS ?" }, { message: "Et pour CLOSED ?", conversationId: "7f3c0b1e-2d4a-4c8e-9a51-6b0d2f1e8a37" }],
       },
       ChatResponse: {
         type: "object",
         properties: {
+          conversationId: { type: "string", format: "uuid", description: "Conversation dans laquelle l'échange a été enregistré." },
           reply: { type: "string", minLength: 1, description: "Réponse de l'assistant." },
           toolsUsed: {
             type: "array",
@@ -561,14 +620,69 @@ export const openApiDocument = {
               "Outils que le serveur a exécutés AVEC SUCCÈS pour cette réponse : arguments valides, requête lancée avec les droits de l'utilisateur, résultat transmis au modèle. Un appel simplement proposé par le modèle, refusé (arguments invalides, outil inconnu, trop d'appels) ou en erreur n'y figure pas. Un ticket introuvable ou non accessible compte comme une consultation réussie qui n'a rien trouvé. Vide si aucune consultation n'a abouti. Cela ne prouve pas que la réponse de l'assistant est exacte. Seuls les noms sont indiqués, jamais les arguments ni le contenu.",
           },
         },
-        required: ["reply", "toolsUsed"],
+        required: ["conversationId", "reply", "toolsUsed"],
         additionalProperties: false,
         examples: [
           {
+            conversationId: "7f3c0b1e-2d4a-4c8e-9a51-6b0d2f1e8a37",
             reply: "Le ticket 12 « Connexion impossible » est en cours de traitement (statut IN_PROGRESS).",
             toolsUsed: ["get_ticket"],
           },
         ],
+      },
+      Conversation: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          title: { type: "string", description: "Début du premier message." },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time", description: "Dernière activité : sert au nettoyage des conversations inactives." },
+          messageCount: { type: "integer", minimum: 0 },
+        },
+        required: ["id", "title", "createdAt", "updatedAt", "messageCount"],
+        additionalProperties: false,
+        examples: [
+          {
+            id: "7f3c0b1e-2d4a-4c8e-9a51-6b0d2f1e8a37",
+            title: "Que signifie le statut IN_PROGRESS ?",
+            createdAt: "2026-11-16T09:00:00.000Z",
+            updatedAt: "2026-11-16T09:02:00.000Z",
+            messageCount: 4,
+          },
+        ],
+      },
+      ConversationPage: {
+        type: "object",
+        properties: { data: { type: "array", items: ref("Conversation") }, meta: ref("PageMeta") },
+        required: ["data", "meta"],
+        additionalProperties: false,
+      },
+      ConversationMessage: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+          role: { type: "string", enum: [...CHAT_ROLES], description: "Auteur du message : l'utilisateur ou l'assistant." },
+          content: { type: "string", description: "Texte du message (réponse finale pour l'assistant)." },
+          toolsUsed: { type: "array", uniqueItems: true, items: { type: "string", enum: ["list_tickets", "get_ticket"] }, description: "Outils exécutés avec succès pour produire cette réponse (vide pour un message de l'utilisateur)." },
+          createdAt: { type: "string", format: "date-time" },
+        },
+        required: ["id", "role", "content", "toolsUsed", "createdAt"],
+        additionalProperties: false,
+        examples: [
+          {
+            id: 1,
+            role: "user",
+            content: "Que signifie le statut IN_PROGRESS ?",
+            toolsUsed: [],
+            createdAt: "2026-11-16T09:00:00.000Z",
+          },
+        ],
+      },
+      ConversationMessagePage: {
+        type: "object",
+        properties: { data: { type: "array", items: ref("ConversationMessage") }, meta: ref("PageMeta") },
+        required: ["data", "meta"],
+        additionalProperties: false,
       },
       Role: { type: "string", enum: [...ROLES], description: "Rôle d'un compte." },
       UserStatus: {

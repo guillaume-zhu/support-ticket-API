@@ -9,7 +9,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "prisma generate && tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
-    "bootstrap:super-admin": "tsx scripts/bootstrap-super-admin.ts"
+    "bootstrap:super-admin": "tsx scripts/bootstrap-super-admin.ts",
+    "ai:purge-conversations": "tsx src/jobs/purge-ai-conversations.ts"
   },
   "keywords": [],
   "author": "",

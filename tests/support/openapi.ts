@@ -40,6 +40,6 @@ export type DereferencedContract = {
 // Lister toutes les opérations du contrat : [méthode, chemin avec {id}, opération].
 export function listOperations(contract: DereferencedContract) {
   return Object.entries(contract.paths).flatMap(([path, methods]) =>
-    Object.entries(methods).map(([method, op]) => ({ method: method as "get" | "post" | "patch", path, op: op as DereferencedOperation })),
+    Object.entries(methods).map(([method, op]) => ({ method: method as "get" | "post" | "patch" | "delete", path, op: op as DereferencedOperation })),
   )
 }

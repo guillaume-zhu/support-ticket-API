@@ -37,7 +37,7 @@ describe("Le contrat est un OpenAPI 3.1 valide", () => {
 describe("Chaque opération est complète et décrit ses permissions", () => {
   it("a un operationId unique, un résumé et les réponses communes", () => {
     const operations = listOperations(contract)
-    expect(operations).toHaveLength(16)
+    expect(operations).toHaveLength(19)
     const ids = operations.map(({ op }) => op.operationId)
     expect(new Set(ids).size).toBe(ids.length)
     for (const { method, path, op } of operations) {
@@ -147,7 +147,10 @@ describe("Les exemples du contrat sont fictifs et cohérents", () => {
   })
 
   it("ne contient aucun vrai jeton, code, hash ni secret", () => {
-    const text = JSON.stringify(openApiDocument)
+    // Les exemples d'identifiants de conversation sont des uuid factices : on vérifie qu'il n'y en a qu'un, puis on les écarte.
+    const uuids = JSON.stringify(openApiDocument).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g) ?? []
+    expect([...new Set(uuids)]).toEqual(["7f3c0b1e-2d4a-4c8e-9a51-6b0d2f1e8a37"])
+    const text = JSON.stringify(openApiDocument).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "uuid")
     expect(text).not.toMatch(/eyJ[A-Za-z0-9_-]{5,}/) // en-tête d'un JWT
     expect(text).not.toMatch(/argon2/i)
     expect(text).not.toMatch(/Bearer\s+[A-Za-z0-9_-]{20,}/)

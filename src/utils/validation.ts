@@ -214,54 +214,69 @@ export function parseAuditLogQuery(
   }
 }
 
-export const CHAT_MAX_MESSAGES = 20
 export const CHAT_MESSAGE_MAX_LENGTH = 2000
-export const CHAT_TOTAL_MAX_LENGTH = 8000
 export const CHAT_ROLES = ["user", "assistant"] as const
 
 export type ChatMessage = { role: (typeof CHAT_ROLES)[number]; content: string }
 
-// Valider le body de POST /ai/chat : { messages: [{ role, content }] }.
-// Seuls les rôles « user » et « assistant » viennent du client : un message « system » (les règles de
-// l'assistant) ou « tool » est refusé, car c'est le serveur qui écrit les règles. Les tailles bornent le coût.
-export function parseChatBody(
+// Limites des conversations enregistrées (voir ai.conversations.service.ts)
+export const CONVERSATION_CONTEXT_MAX_MESSAGES = 20 // messages envoyés au fournisseur, nouveau message compris
+export const CONVERSATION_CONTEXT_MAX_CHARS = 12_000
+export const CONVERSATION_MAX_PER_USER = 30
+export const CONVERSATION_MAX_MESSAGES = 100
+export const CONVERSATION_TITLE_MAX_CHARS = 80
+export const CONVERSATION_RETENTION_DEFAULT_DAYS = 90
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+// Lire un identifiant de conversation (uuid en minuscules, tel que PostgreSQL le génère) ; null s'il est invalide.
+export function parseConversationId(value: unknown) {
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value : null
+}
+
+// Valider le body de POST /ai/chat : { message, conversationId? }.
+// Le client n'envoie QUE le texte de son nouveau message : l'historique, les rôles et les résultats d'outils viennent
+// de la base et du serveur, jamais du client (impossible de fabriquer un faux message « assistant » ou « system »).
+export function parseChatRequest(
   body: unknown,
-): { ok: true; value: ChatMessage[] } | { ok: false; error: string } {
-  const parsed = parseBody(body, ["messages"])
+): { ok: true; value: { message: string; conversationId: string | undefined } } | { ok: false; error: string } {
+  const parsed = parseBody(body, ["message", "conversationId"])
   if (!parsed.ok) return parsed
 
-  const { messages } = parsed.value
-  if (!Array.isArray(messages) || messages.length < 1 || messages.length > CHAT_MAX_MESSAGES) {
-    return { ok: false, error: `messages doit être une liste de 1 à ${CHAT_MAX_MESSAGES} messages` }
+  const message = parseText(parsed.value.message, CHAT_MESSAGE_MAX_LENGTH, true)
+  if (message === null) {
+    return {
+      ok: false,
+      error: `message invalide (texte non vide de ${CHAT_MESSAGE_MAX_LENGTH} caractères maximum, sans caractères de contrôle)`,
+    }
   }
 
-  const result: ChatMessage[] = []
-  let total = 0
-  for (const [index, message] of messages.entries()) {
-    const item = parseBody(message, ["role", "content"])
-    if (!item.ok || message === null || typeof message !== "object" || Array.isArray(message)) {
-      return { ok: false, error: `messages[${index}] invalide : { role, content } attendu` }
-    }
-    const { role, content } = item.value
-    if (role !== "user" && role !== "assistant") {
-      return { ok: false, error: `messages[${index}].role doit valoir user ou assistant` }
-    }
-    const text = parseText(content, CHAT_MESSAGE_MAX_LENGTH, true)
-    if (text === null) {
-      return {
-        ok: false,
-        error: `messages[${index}].content invalide (texte non vide de ${CHAT_MESSAGE_MAX_LENGTH} caractères maximum, sans caractères de contrôle)`,
-      }
-    }
-    total += [...text].length
-    result.push({ role, content: text })
-  }
+  const rawId = parsed.value.conversationId
+  if (rawId === undefined || rawId === null) return { ok: true, value: { message, conversationId: undefined } }
+  const conversationId = parseConversationId(rawId)
+  if (conversationId === null) return { ok: false, error: "conversationId invalide (identifiant de conversation attendu)" }
+  return { ok: true, value: { message, conversationId } }
+}
 
-  if (total > CHAT_TOTAL_MAX_LENGTH) {
-    return { ok: false, error: `la conversation dépasse ${CHAT_TOTAL_MAX_LENGTH} caractères au total` }
-  }
-  if (result[result.length - 1]!.role !== "user") {
-    return { ok: false, error: "le dernier message doit venir de l'utilisateur (role user)" }
-  }
-  return { ok: true, value: result }
+// Valider page et limit d'une liste (même règles que les autres listes paginées de l'API).
+export function parsePageQuery(
+  query: Record<string, unknown>,
+  defaultLimit: number,
+  maxLimit: number,
+): { ok: true; value: { page: number; limit: number } } | { ok: false; error: string } {
+  const params = readQueryParams(query, ["page", "limit"])
+  if (!params.ok) return params
+  const page = parsePositiveInt(params.raw.page, MAX_PAGE)
+  if (page === null) return { ok: false, error: "page invalide" }
+  const limit = parsePositiveInt(params.raw.limit, maxLimit)
+  if (limit === null) return { ok: false, error: `limit invalide (1 à ${maxLimit})` }
+  return { ok: true, value: { page: page ?? 1, limit: limit ?? defaultLimit } }
+}
+
+// Lire AI_CONVERSATION_RETENTION_DAYS : nombre de jours d'inactivité avant la suppression d'une conversation.
+export function parseRetentionDays(value: string | undefined) {
+  if (value === undefined || value === "") return CONVERSATION_RETENTION_DEFAULT_DAYS
+  const days = /^[0-9]{1,4}$/.test(value) ? Number(value) : NaN
+  if (!(days >= 1 && days <= 3650)) throw new Error("AI_CONVERSATION_RETENTION_DAYS doit être un entier entre 1 et 3650")
+  return days
 }

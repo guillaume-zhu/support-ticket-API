@@ -58,6 +58,8 @@ model User {
   // Historique : supprimer un compte ne supprime jamais ses lignes d'audit (SetNull sur AuditLog).
   auditAsActor  AuditLog[] @relation("AuditActor")
   auditAsTarget AuditLog[] @relation("AuditTarget")
+  // Conversations avec l'assistant IA : supprimer un compte supprime aussi ses conversations (Cascade).
+  aiConversations AiConversation[]
 }
 
 model Session {
@@ -106,4 +108,41 @@ model AuditLog {
   @@index([action])
   @@index([actorId])
   @@index([targetUserId])
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+}
+
+// Une conversation avec l'assistant IA. Elle n'appartient qu'à son utilisateur : personne d'autre ne la lit.
+model AiConversation {
+  id        String      @id @default(uuid())
+  userId    Int
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Début du premier message, pour retrouver la conversation dans une liste.
+  title     String
+  createdAt DateTime    @default(now())
+  // Dernière activité : mise à jour à chaque échange enregistré. Elle sert à la purge des conversations inactives.
+  updatedAt DateTime    @updatedAt
+  messages  AiMessage[]
+
+  @@index([userId, updatedAt])
+  @@index([updatedAt])
+}
+
+// Un message de la conversation : le texte de l'utilisateur ou la réponse FINALE de l'assistant.
+// Les appels de fonctions, leurs résultats et le raisonnement du modèle ne sont jamais stockés.
+// Supprimer la conversation supprime ses messages (Cascade, appliqué par PostgreSQL).
+model AiMessage {
+  id             Int            @id @default(autoincrement())
+  conversationId String
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           AiMessageRole
+  content        String
+  // Noms des outils exécutés avec succès pour produire cette réponse (jamais leurs arguments ni leur contenu).
+  toolsUsed      String[]       @default([])
+  createdAt      DateTime       @default(now())
+
+  @@index([conversationId, id])
 }

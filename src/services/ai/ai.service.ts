@@ -7,8 +7,9 @@ import { executeTicketTool, TICKET_TOOLS, type TicketToolName } from "./ai.tools
 
 // Appel du fournisseur d'IA (OpenAI ou DeepSeek) avec l'API « Responses », que les deux documentent.
 // Un seul point d'appel : si le format change, c'est ici et seulement ici qu'il faut intervenir.
-// Rien de ce qui est échangé (messages, réponses, résultats d'outils, raisonnement, corps d'erreur du fournisseur)
-// n'est stocké ni journalisé : seuls des messages fixes, sans contenu, sont écrits dans les logs.
+// Ce service ne stocke rien (l'enregistrement des conversations est dans ai.conversations.service.ts) et ne journalise
+// aucun contenu (messages, réponses, résultats d'outils, raisonnement, corps d'erreur du fournisseur) : seuls des
+// messages fixes, sans contenu, sont écrits dans les logs.
 
 // `declaresStrictFalse` : OpenAI documente `strict` sur les outils de l'API Responses, donc on écrit explicitement
 // strict: false (les arguments sont validés côté serveur de toute façon). DeepSeek ne le documente pas pour ce format
@@ -162,7 +163,9 @@ export function extractReply(body: unknown): string | null {
   }
   if (text === "" && typeof response.output_text === "string") text = response.output_text
 
-  text = text.trim()
+  // Pas de caractères de contrôle (sauf retour à la ligne et tabulation) : la réponse est enregistrée en base,
+  // et PostgreSQL refuse l'octet NUL dans un texte.
+  text = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim()
   if (text === "") return null
   const characters = [...text]
   return characters.length > MAX_REPLY_CHARS ? `${characters.slice(0, MAX_REPLY_CHARS).join("")}…` : text
