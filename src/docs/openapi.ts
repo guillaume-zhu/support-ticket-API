@@ -3,6 +3,10 @@ import { ACTION_TOKEN_LENGTH, PASSWORD_MIN_LENGTH } from "../utils/credentials.j
 import { MAX_JWT_LENGTH } from "../utils/jwt.js"
 import {
   AUDIT_ACTIONS,
+  CHAT_MAX_MESSAGES,
+  CHAT_MESSAGE_MAX_LENGTH,
+  CHAT_ROLES,
+  CHAT_TOTAL_MAX_LENGTH,
   EMAIL_MAX_LENGTH,
   MAX_PAGE,
   MAX_PAGE_SIZE,
@@ -143,6 +147,7 @@ export const openApiDocument = {
     { name: "Comptes", description: "Gestion des comptes, réservée au SUPER_ADMIN." },
     { name: "Tickets", description: "Création, lecture et suivi des tickets." },
     { name: "Audit", description: "Journal des actions sensibles, en lecture seule." },
+    { name: "Assistant", description: "Assistant IA spécialisé dans le support et l'utilisation de l'application." },
   ],
   paths: {
     "/auth/login": {
@@ -411,6 +416,31 @@ export const openApiDocument = {
         },
       }),
     },
+    "/ai/chat": {
+      post: operation({
+        tag: "Assistant",
+        operationId: "chatWithAssistant",
+        summary: "Poser une question à l'assistant IA",
+        description: [
+          "Envoie une conversation à l'assistant et renvoie sa réponse. L'assistant explique le fonctionnement de l'application et des tickets (statuts, rôles) et propose des pistes de résolution générales ; il refuse poliment les demandes sans rapport avec le support.",
+          "",
+          "**À ce stade, l'assistant n'a pas accès aux tickets réels** : il ne peut ni les lire, ni les créer, ni les modifier, et il ne doit rien inventer à leur sujet.",
+          "",
+          "L'API ne garde aucune mémoire : renvoyer l'historique de la conversation à chaque appel. Seuls les rôles `user` et `assistant` sont acceptés ; les règles de l'assistant sont ajoutées par le serveur et un message `system` est refusé.",
+          "",
+          `Les messages sont transmis à un fournisseur d'IA tiers (OpenAI ou DeepSeek) : ne pas y saisir de mot de passe, de jeton ni de donnée personnelle sensible. L'application ne stocke ni ne journalise le contenu des messages ni des réponses ; la conservation éventuelle côté fournisseur dépend de sa politique et de la configuration de son compte. Limité à ${limits.aiPerUser} questions par utilisateur et ${limits.aiGlobal} au total sur 15 minutes.`,
+        ].join("\n"),
+        roles: ["SUPER_ADMIN", "ADMIN", "AGENT", "USER"],
+        requestBody: "ChatRequest",
+        responses: {
+          "200": { description: "Réponse de l'assistant.", content: json(ref("ChatResponse")) },
+          "400": errorResponse("Conversation invalide (rôle, taille, nombre de messages, champ inconnu, dernier message qui ne vient pas de l'utilisateur)."),
+          "401": errorResponse("Authentification requise."),
+          "502": errorResponse("Le fournisseur d'IA a échoué (clé refusée, quota, délai dépassé, réponse inutilisable). Aucun détail du fournisseur n'est transmis."),
+          "503": errorResponse("Assistant non configuré sur ce serveur."),
+        },
+      }),
+    },
     "/audit-logs": {
       get: operation({
         tag: "Audit",
@@ -488,6 +518,43 @@ export const openApiDocument = {
         required: ["message"],
         additionalProperties: false,
         examples: [{ message: "Invitation transmise" }],
+      },
+      ChatMessage: {
+        type: "object",
+        properties: {
+          role: { type: "string", enum: [...CHAT_ROLES], description: "Auteur du message : l'utilisateur ou l'assistant." },
+          content: {
+            type: "string",
+            minLength: 1,
+            maxLength: CHAT_MESSAGE_MAX_LENGTH,
+            description: "Texte du message, sans caractères de contrôle (retours à la ligne permis).",
+          },
+        },
+        required: ["role", "content"],
+        additionalProperties: false,
+        examples: [{ role: "user", content: "Que signifie le statut IN_PROGRESS ?" }],
+      },
+      ChatRequest: {
+        type: "object",
+        properties: {
+          messages: {
+            type: "array",
+            minItems: 1,
+            maxItems: CHAT_MAX_MESSAGES,
+            items: ref("ChatMessage"),
+            description: `Conversation, du plus ancien au plus récent ; le dernier message doit être de l'utilisateur. ${CHAT_TOTAL_MAX_LENGTH} caractères au total au maximum.`,
+          },
+        },
+        required: ["messages"],
+        additionalProperties: false,
+        examples: [{ messages: [{ role: "user", content: "Que signifie le statut IN_PROGRESS ?" }] }],
+      },
+      ChatResponse: {
+        type: "object",
+        properties: { reply: { type: "string", minLength: 1, description: "Réponse de l'assistant." } },
+        required: ["reply"],
+        additionalProperties: false,
+        examples: [{ reply: "Le statut IN_PROGRESS signifie que le ticket est pris en charge et en cours de traitement." }],
       },
       Role: { type: "string", enum: [...ROLES], description: "Rôle d'un compte." },
       UserStatus: {

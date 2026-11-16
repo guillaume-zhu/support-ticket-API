@@ -22,6 +22,7 @@ const HIGH = 1000
 const high: RateLimits = {
   global: HIGH, loginPerIp: HIGH, loginFailuresPerIpAndEmail: HIGH,
   passwordResetPerIp: HIGH, passwordResetPerEmail: HIGH, codesPerIp: HIGH, refreshPerIp: HIGH,
+  aiPerUser: HIGH, aiGlobal: HIGH,
 }
 
 // Une application neuve par test : ses compteurs en mémoire repartent de zéro.

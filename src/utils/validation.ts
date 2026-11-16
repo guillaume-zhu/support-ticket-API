@@ -213,3 +213,55 @@ export function parseAuditLogQuery(
     value: { page: page ?? 1, limit: limit ?? 20, action: action as AuditLogListOptions["action"], actorId, targetUserId },
   }
 }
+
+export const CHAT_MAX_MESSAGES = 20
+export const CHAT_MESSAGE_MAX_LENGTH = 2000
+export const CHAT_TOTAL_MAX_LENGTH = 8000
+export const CHAT_ROLES = ["user", "assistant"] as const
+
+export type ChatMessage = { role: (typeof CHAT_ROLES)[number]; content: string }
+
+// Valider le body de POST /ai/chat : { messages: [{ role, content }] }.
+// Seuls les rôles « user » et « assistant » viennent du client : un message « system » (les règles de
+// l'assistant) ou « tool » est refusé, car c'est le serveur qui écrit les règles. Les tailles bornent le coût.
+export function parseChatBody(
+  body: unknown,
+): { ok: true; value: ChatMessage[] } | { ok: false; error: string } {
+  const parsed = parseBody(body, ["messages"])
+  if (!parsed.ok) return parsed
+
+  const { messages } = parsed.value
+  if (!Array.isArray(messages) || messages.length < 1 || messages.length > CHAT_MAX_MESSAGES) {
+    return { ok: false, error: `messages doit être une liste de 1 à ${CHAT_MAX_MESSAGES} messages` }
+  }
+
+  const result: ChatMessage[] = []
+  let total = 0
+  for (const [index, message] of messages.entries()) {
+    const item = parseBody(message, ["role", "content"])
+    if (!item.ok || message === null || typeof message !== "object" || Array.isArray(message)) {
+      return { ok: false, error: `messages[${index}] invalide : { role, content } attendu` }
+    }
+    const { role, content } = item.value
+    if (role !== "user" && role !== "assistant") {
+      return { ok: false, error: `messages[${index}].role doit valoir user ou assistant` }
+    }
+    const text = parseText(content, CHAT_MESSAGE_MAX_LENGTH, true)
+    if (text === null) {
+      return {
+        ok: false,
+        error: `messages[${index}].content invalide (texte non vide de ${CHAT_MESSAGE_MAX_LENGTH} caractères maximum, sans caractères de contrôle)`,
+      }
+    }
+    total += [...text].length
+    result.push({ role, content: text })
+  }
+
+  if (total > CHAT_TOTAL_MAX_LENGTH) {
+    return { ok: false, error: `la conversation dépasse ${CHAT_TOTAL_MAX_LENGTH} caractères au total` }
+  }
+  if (result[result.length - 1]!.role !== "user") {
+    return { ok: false, error: "le dernier message doit venir de l'utilisateur (role user)" }
+  }
+  return { ok: true, value: result }
+}

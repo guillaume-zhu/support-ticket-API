@@ -189,6 +189,7 @@ describe("Aucune entrée hostile ne provoque de 500", () => {
     { method: "post", path: "/users", role: "SUPER_ADMIN", base: { email: "nouveau@example.invalid", role: "USER" } },
     { method: "post", path: "/tickets", role: "USER", base: { title: "titre", description: "description" } },
     { method: "patch", path: "/tickets/1/status", role: "AGENT", base: { status: "OPEN" } },
+    { method: "post", path: "/ai/chat", role: "USER", base: { messages: [{ role: "user", content: "Bonjour" }] } },
   ]
 
   it("répond toujours 4xx ou 2xx (jamais 5xx) à des valeurs hostiles dans chaque champ", async () => {

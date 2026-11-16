@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { readdirSync, readFileSync } from "node:fs"
 import request from "supertest"
 import { PrismaPg } from "@prisma/adapter-pg"
@@ -251,6 +251,46 @@ describe("Journal d'audit : les réponses respectent le contrat", () => {
   })
 })
 
+describe("Assistant IA : les réponses respectent le contrat", () => {
+  const providerReply = (text: string) =>
+    new Response(JSON.stringify({ status: "completed", error: null, output: [{ type: "message", content: [{ type: "output_text", text }] }] }), { status: 200 })
+  const question = { messages: [{ role: "user", content: "Que signifie IN_PROGRESS ?" }] }
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    // Faux fournisseur : aucun appel réseau réel, aucune clé réelle.
+    for (const [name, value] of Object.entries({ AI_PROVIDER: "openai", AI_API_KEY: "test-key-not-a-real-secret-1234", AI_MODEL: "test-model" })) vi.stubEnv(name, value)
+    fetchMock.mockReset()
+    fetchMock.mockImplementation(async () => {
+      throw new Error("appel réseau non simulé : interdit pendant les tests")
+    })
+    vi.stubGlobal("fetch", fetchMock)
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  it("200, 400, 401, 502 et 503", async () => {
+    fetchMock.mockResolvedValueOnce(providerReply("IN_PROGRESS signifie que le ticket est en cours de traitement."))
+    const ok = await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 200)
+    expect(ok.body).toEqual({ reply: "IN_PROGRESS signifie que le ticket est en cours de traitement." })
+
+    await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: { messages: [] } }), "post", "/ai/chat", 400)
+    await expectContract(call("post", "/ai/chat", { body: question }), "post", "/ai/chat", 401)
+
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    fetchMock.mockResolvedValueOnce(new Response("erreur", { status: 500 }))
+    await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 502)
+
+    vi.stubEnv("AI_API_KEY", "")
+    vi.stubEnv("AI_PROVIDER", "")
+    vi.stubEnv("AI_MODEL", "")
+    await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 503)
+    expect(fetchMock).toHaveBeenCalledTimes(2) // la réponse 200 et la panne 502 seulement
+  })
+})
+
 describe("Erreurs communes : 429 et 500 respectent le contrat", () => {
   it("429 avec Retry-After", async () => {
     const limited = createApp(prisma, { rateLimits: { global: 1 } })
@@ -279,7 +319,7 @@ describe("Erreurs communes : 429 et 500 respectent le contrat", () => {
 describe("Les rôles documentés sont les rôles réellement appliqués", () => {
   it("chaque opération autorise exactement les rôles de x-roles", async () => {
     const operations = listOperations(contract)
-    expect(operations.length).toBe(15)
+    expect(operations.length).toBe(16)
     for (const { method, path, op } of operations) {
       // Appel sans effet de bord : id inexistant, body vide (rejeté ou sans cible).
       const url = path.replace("{id}", "999999")
@@ -306,7 +346,7 @@ describe("Couverture : chaque opération du contrat a été exercée", () => {
   // S'appuie sur les tests ci-dessus, exécutés dans l'ordre du fichier : chaque opération doit avoir
   // reçu au moins une vraie réponse de succès conforme au contrat. Une route documentée mais absente
   // (qui répondrait 404) est donc détectée ici.
-  it("a obtenu une réponse de succès pour les 15 opérations", () => {
+  it("a obtenu une réponse de succès pour les 16 opérations", () => {
     const expected = listOperations(contract).map(({ method, path }) => `${method} ${path}`).sort()
     expect([...succeeded].sort()).toEqual(expected)
   })

@@ -37,7 +37,7 @@ describe("Le contrat est un OpenAPI 3.1 valide", () => {
 describe("Chaque opération est complète et décrit ses permissions", () => {
   it("a un operationId unique, un résumé et les réponses communes", () => {
     const operations = listOperations(contract)
-    expect(operations).toHaveLength(15)
+    expect(operations).toHaveLength(16)
     const ids = operations.map(({ op }) => op.operationId)
     expect(new Set(ids).size).toBe(ids.length)
     for (const { method, path, op } of operations) {

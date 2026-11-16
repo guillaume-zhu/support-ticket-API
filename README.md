@@ -156,6 +156,7 @@ Les access tokens sont également liés à leur session et refusés après sa r�
 | PATCH   | `/users/:id/disable` | Désactiver un compte |
 | PATCH   | `/users/:id/enable` | Réactiver un compte |
 | GET     | `/audit-logs` | Consulter l'historique des actions sensibles (Super Admin) |
+| POST    | `/ai/chat` | Poser une question à l'assistant IA (tout compte connecté) |
 
 Pour `POST /tickets`, envoyer un corps JSON :
 
@@ -270,6 +271,91 @@ dans les controllers et `src/utils`. Pour qu'il ne mente pas, les tests :
   exhaustif).
 
 Ajouter une route demande donc de la décrire dans `src/docs/openapi.ts`.
+
+## Assistant IA
+
+`POST /ai/chat` permet à tout compte connecté de poser des questions à un assistant
+spécialisé dans le support et l'utilisation de l'application (statuts, rôles, façon
+de formuler un problème, pistes de résolution générales). Il refuse poliment le reste.
+
+**À ce stade, l'assistant n'a accès à aucun ticket** : il ne peut ni les lire, ni les
+créer, ni les modifier, et son message système lui interdit d'en inventer.
+
+```json
+{ "messages": [ { "role": "user", "content": "Que signifie le statut IN_PROGRESS ?" } ] }
+```
+
+Réponse : `{ "reply": "..." }`. L'API est sans mémoire : le client renvoie l'historique à
+chaque appel (20 messages, 2 000 caractères par message et 8 000 au total au maximum).
+Seuls les rôles `user` et `assistant` sont acceptés : les règles de l'assistant sont écrites
+par le serveur (`src/services/ai/ai.prompt.ts`) et un message `system` est refusé.
+Erreurs : `400` conversation invalide, `401`, `429`, `502` fournisseur indisponible,
+`503` assistant non configuré.
+
+### Configuration
+
+Dans `.env` (jamais dans Git) :
+
+| Variable | Rôle |
+| --- | --- |
+| `AI_PROVIDER` | `openai` ou `deepseek` |
+| `AI_API_KEY` | clé du fournisseur, uniquement côté serveur |
+| `AI_MODEL` | nom exact d'un modèle autorisé par la clé (obligatoire, aucune valeur par défaut) |
+| `AI_BASE_URL` | optionnel : adresse `https` du fournisseur (ex. région UE d'OpenAI) |
+| `AI_MAX_OUTPUT_TOKENS` | optionnel, 2000 par défaut : plafond de TOUS les tokens générés, **raisonnement compris** |
+| `AI_TIMEOUT_MS` | optionnel, 30 000 par défaut : délai maximal avant `502` |
+| `AI_REASONING_EFFORT` | optionnel : `none`, `low`, `medium` ou `high` |
+
+Sans les trois premières variables, l'assistant est désactivé et la route répond `503`. Une
+configuration incomplète ou invalide arrête le démarrage avec un message qui cite le nom des
+variables, jamais leur valeur.
+
+L'appel utilise l'API **Responses** (`POST {adresse}/responses`), que OpenAI et DeepSeek
+documentent toutes deux. Le serveur n'envoie que les paramètres communs : `model`,
+`instructions`, `input`, `max_output_tokens`, `store: false` et, si configuré, `reasoning`.
+Changer de fournisseur revient à changer ces variables.
+
+**Raisonnement et plafond.** Un modèle qui raisonne dépense des tokens avant d'écrire sa
+réponse, et ils comptent dans `AI_MAX_OUTPUT_TOKENS` : trop bas, la réponse arrive vide (le
+serveur répond alors `502` et l'indique dans ses logs, sans contenu). Pour un assistant de
+support, mieux vaut désactiver le raisonnement quand le modèle le permet
+(`AI_REASONING_EFFORT=none`) ; sinon, augmenter le plafond et le délai.
+
+### Coûts
+
+Chaque question est facturée par le fournisseur. Le serveur limite à 30 questions par
+utilisateur et 300 au total par 15 minutes (`src/middlewares/rate-limit.ts`), plafonne la
+taille des messages et de la réponse, et ne relance jamais un appel. Ces compteurs sont en
+mémoire : **ce n'est pas un plafond de dépense ferme**. Fixer aussi un budget maximal dans le
+tableau de bord du fournisseur.
+
+### Confidentialité
+
+L'application ne stocke ni ne journalise le contenu des messages ni des réponses, et n'envoie au
+fournisseur aucune donnée d'identité (ni email, ni identifiant, ni rôle). Les messages sont
+néanmoins **transmis à un tiers** : ne pas y saisir de mot de passe, de jeton ni de donnée
+personnelle sensible. D'après la documentation officielle consultée le 16 novembre 2026 (à
+revérifier, elle évolue) :
+
+- **OpenAI** : les données envoyées à l'API ne servent pas à l'entraînement par défaut ;
+  des journaux de détection d'abus sont conservés jusqu'à 30 jours ; la rétention nulle
+  (*Zero Data Retention*) n'est pas activable par un paramètre, elle exige une approbation
+  d'OpenAI pour l'organisation ; la résidence des données (ex. Europe) se choisit à la création
+  du projet. Le serveur envoie `store: false` pour ne pas conserver l'état de la réponse.
+- **DeepSeek** : la politique de confidentialité indique que les données sont traitées et
+  stockées en République populaire de Chine ; aucune option de rétention nulle ni de refus
+  d'entraînement propre à l'API n'a été trouvée ; un cache de prompts sur disque est actif par
+  défaut ; les conditions demandent au développeur d'informer les utilisateurs finaux et de
+  disposer d'une base légale.
+
+Rien ici ne garantit l'absence de conservation côté fournisseur.
+
+### Tests
+
+Les tests automatisés remplacent `fetch` par un faux fournisseur : aucun appel réseau, aucune clé
+réelle (`npm test` vide les variables `AI_*`). Le comportement du modèle lui-même (refus du
+hors-sujet, respect du message système) ne peut être vérifié que par un **test manuel** avec une
+vraie clé, à lancer volontairement.
 
 ## Journal d'audit
 

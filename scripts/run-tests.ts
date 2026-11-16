@@ -15,6 +15,14 @@ const env = {
   RESEND_API_KEY: "test-only",
   RESEND_FROM_EMAIL: "test@example.invalid",
   NODE_ENV: "test",
+  // Aucune clé d'IA réelle ne doit atteindre les tests, même présente dans le shell : jamais d'appel facturé.
+  AI_PROVIDER: "",
+  AI_API_KEY: "",
+  AI_MODEL: "",
+  AI_BASE_URL: "",
+  AI_MAX_OUTPUT_TOKENS: "",
+  AI_TIMEOUT_MS: "",
+  AI_REASONING_EFFORT: "",
 }
 
 // Migrer uniquement la base de test validée avant de démarrer Vitest.
