@@ -175,6 +175,8 @@ export const AUDIT_ACTIONS = [
   "INVITATION_ACCEPTED",
   "PASSWORD_RESET_COMPLETED",
   "SUPER_ADMIN_BOOTSTRAPPED",
+  "ASSISTANT_TICKET_CREATED",
+  "ASSISTANT_TICKET_STATUS_CHANGED",
 ] as const
 const AUDIT_LIST_PARAMS = ["page", "limit", "action", "actorId", "targetUserId"]
 
@@ -279,4 +281,24 @@ export function parseRetentionDays(value: string | undefined) {
   const days = /^[0-9]{1,4}$/.test(value) ? Number(value) : NaN
   if (!(days >= 1 && days <= 3650)) throw new Error("AI_CONVERSATION_RETENTION_DAYS doit être un entier entre 1 et 3650")
   return days
+}
+
+// Actions proposées par l'assistant, à confirmer par l'utilisateur (voir ai.actions.service.ts)
+export const AI_ACTION_TTL_MINUTES = 10 // au-delà, une action en attente est périmée : elle ne compte plus et ne peut plus être confirmée
+export const AI_MAX_PENDING_PER_USER = 5 // actions en attente ET non périmées
+export const AI_MAX_PROPOSALS_PER_REQUEST = 3
+export const AI_ACTION_CLEANUP_GRACE_DAYS = 1 // le nettoyage quotidien supprime les actions périmées depuis plus de ce délai
+export const AI_ACTION_KINDS = ["CREATE_TICKET", "CHANGE_STATUS"] as const
+
+// Valider le body de POST /ai/actions/:id/confirm : { resolutionConfirmed?: boolean }.
+export function parseConfirmBody(
+  body: unknown,
+): { ok: true; value: { resolutionConfirmed: boolean } } | { ok: false; error: string } {
+  const parsed = parseBody(body, ["resolutionConfirmed"])
+  if (!parsed.ok) return parsed
+  const { resolutionConfirmed } = parsed.value
+  if (resolutionConfirmed !== undefined && typeof resolutionConfirmed !== "boolean") {
+    return { ok: false, error: "resolutionConfirmed doit être un booléen" }
+  }
+  return { ok: true, value: { resolutionConfirmed: resolutionConfirmed === true } }
 }

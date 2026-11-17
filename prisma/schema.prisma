@@ -60,6 +60,7 @@ model User {
   auditAsTarget AuditLog[] @relation("AuditTarget")
   // Conversations avec l'assistant IA : supprimer un compte supprime aussi ses conversations (Cascade).
   aiConversations AiConversation[]
+  aiPendingActions AiPendingAction[]
 }
 
 model Session {
@@ -87,6 +88,8 @@ enum AuditAction {
   INVITATION_ACCEPTED
   PASSWORD_RESET_COMPLETED
   SUPER_ADMIN_BOOTSTRAPPED
+  ASSISTANT_TICKET_CREATED
+  ASSISTANT_TICKET_STATUS_CHANGED
 }
 
 // Registre des actions sensibles : on y ajoute des lignes, on ne les modifie ni ne les supprime.
@@ -126,6 +129,7 @@ model AiConversation {
   // Dernière activité : mise à jour à chaque échange enregistré. Elle sert à la purge des conversations inactives.
   updatedAt DateTime    @updatedAt
   messages  AiMessage[]
+  pendingActions AiPendingAction[]
 
   @@index([userId, updatedAt])
   @@index([updatedAt])
@@ -145,4 +149,39 @@ model AiMessage {
   createdAt      DateTime       @default(now())
 
   @@index([conversationId, id])
+}
+
+enum AiPendingActionKind {
+  CREATE_TICKET
+  CHANGE_STATUS
+}
+
+enum AiPendingActionStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+// Une action proposée par l'assistant, EN ATTENTE de la confirmation de l'utilisateur. Rien n'est écrit sur les tickets
+// tant qu'elle n'est pas confirmée par une requête HTTP vérifiée. Supprimée avec sa conversation ou son compte (Cascade).
+model AiPendingAction {
+  id             String                @id @default(uuid())
+  userId         Int
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   AiConversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  kind           AiPendingActionKind
+  status         AiPendingActionStatus @default(PENDING)
+  // Données validées de l'action (création : titre et description ; statut : ticket, statut attendu, nouveau statut).
+  // Effacées ({}) dès que l'action est résolue.
+  payload        Json
+  // Résumé écrit par le SERVEUR : c'est ce que l'utilisateur confirme, jamais une phrase du modèle. Effacé à la résolution.
+  summary        String
+  expiresAt      DateTime
+  createdAt      DateTime              @default(now())
+  resolvedAt     DateTime?
+
+  @@index([userId, status, expiresAt])
+  @@index([conversationId])
+  @@index([expiresAt])
 }

@@ -37,7 +37,7 @@ describe("Le contrat est un OpenAPI 3.1 valide", () => {
 describe("Chaque opération est complète et décrit ses permissions", () => {
   it("a un operationId unique, un résumé et les réponses communes", () => {
     const operations = listOperations(contract)
-    expect(operations).toHaveLength(19)
+    expect(operations).toHaveLength(22)
     const ids = operations.map(({ op }) => op.operationId)
     expect(new Set(ids).size).toBe(ids.length)
     for (const { method, path, op } of operations) {
@@ -156,7 +156,7 @@ describe("Les exemples du contrat sont fictifs et cohérents", () => {
     expect(text).not.toMatch(/Bearer\s+[A-Za-z0-9_-]{20,}/)
     // Toute longue chaîne base64url doit être un exemple manifestement factice (un seul caractère répété).
     for (const candidate of text.match(/[A-Za-z0-9_-]{30,}/g) ?? []) {
-      if (!candidate.includes("-d-")) expect(new Set(candidate).size, candidate).toBeLessThanOrEqual(2)
+      if (!candidate.includes("-d-") && !/^[A-Z_]+$/.test(candidate)) expect(new Set(candidate).size, candidate).toBeLessThanOrEqual(2)
     }
     // Seuls des domaines réservés aux exemples.
     for (const email of text.match(/[\w.+-]+@[\w.-]+/g) ?? []) expect(email).toMatch(/@example\.com$/)

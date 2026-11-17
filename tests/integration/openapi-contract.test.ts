@@ -274,7 +274,7 @@ describe("Assistant IA : les réponses respectent le contrat", () => {
   it("200, 400, 401, 404, 409, 502 et 503", async () => {
     fetchMock.mockResolvedValueOnce(providerReply("IN_PROGRESS signifie que le ticket est en cours de traitement."))
     const ok = await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 200)
-    expect(ok.body).toEqual({ conversationId: expect.any(String), reply: "IN_PROGRESS signifie que le ticket est en cours de traitement.", toolsUsed: [] })
+    expect(ok.body).toEqual({ conversationId: expect.any(String), reply: "IN_PROGRESS signifie que le ticket est en cours de traitement.", toolsUsed: [], pendingActions: [] })
 
     await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: { message: "" } }), "post", "/ai/chat", 400)
     await expectContract(call("post", "/ai/chat", { body: question }), "post", "/ai/chat", 401)
@@ -305,7 +305,43 @@ describe("Assistant IA : les réponses respectent le contrat", () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "completed", output: [functionCall] }), { status: 200 }))
     fetchMock.mockResolvedValueOnce(providerReply("Le ticket est ouvert."))
     const response = await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 200)
-    expect(response.body).toEqual({ conversationId: expect.any(String), reply: "Le ticket est ouvert.", toolsUsed: ["get_ticket"] })
+    expect(response.body).toEqual({ conversationId: expect.any(String), reply: "Le ticket est ouvert.", toolsUsed: ["get_ticket"], pendingActions: [] })
+  })
+
+  it("actions proposées : pendingActions, liste, confirmation et annulation conformes au contrat", async () => {
+    vi.stubEnv("AI_TICKET_TOOLS", "true")
+    vi.stubEnv("AI_TICKET_ACTIONS", "true")
+    const proposal = { type: "function_call", id: "fc_1", call_id: "call_1", name: "propose_create_ticket", arguments: JSON.stringify({ title: "Imprimante en panne", description: "Plus de papier" }) }
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "completed", output: [proposal] }), { status: 200 }))
+    fetchMock.mockResolvedValueOnce(providerReply("Je vous propose de créer ce ticket."))
+    const chat = await expectContract(call("post", "/ai/chat", { token: bearer("USER"), body: question }), "post", "/ai/chat", 200)
+    expect(chat.body.pendingActions).toHaveLength(1)
+    expect(await prisma.ticket.count()).toBe(0) // rien n'est écrit sans confirmation
+    const id = chat.body.pendingActions[0].id
+
+    const list = await expectContract(call("get", "/ai/actions", { token: bearer("USER") }), "get", "/ai/actions", 200)
+    expect(list.body.data).toHaveLength(1)
+    await expectContract(call("get", "/ai/actions"), "get", "/ai/actions", 401)
+
+    await expectContract(call("post", "/ai/actions/abc/confirm", { token: bearer("USER") }), "post", "/ai/actions/{id}/confirm", 400)
+    await expectContract(call("post", `/ai/actions/${id}/confirm`), "post", "/ai/actions/{id}/confirm", 401)
+    await expectContract(call("post", `/ai/actions/${id}/confirm`, { token: bearer("AGENT") }), "post", "/ai/actions/{id}/confirm", 404)
+    const confirmed = await expectContract(call("post", `/ai/actions/${id}/confirm`, { token: bearer("USER") }), "post", "/ai/actions/{id}/confirm", 200)
+    expect(confirmed.body.ticket.title).toBe("Imprimante en panne")
+    await expectContract(call("post", `/ai/actions/${id}/confirm`, { token: bearer("USER") }), "post", "/ai/actions/{id}/confirm", 409)
+
+    // Annulation d'une seconde action (insérée directement), puis coupe-circuit 503.
+    const conversationId = chat.body.conversationId
+    const second = await prisma.aiPendingAction.create({
+      data: { userId: users.USER.id, conversationId, kind: "CREATE_TICKET", payload: { title: "B", description: "" }, summary: "Créer le ticket « B »", expiresAt: new Date(Date.now() + 600_000) },
+    })
+    await expectContract(call("post", `/ai/actions/${second.id}/cancel`, { token: bearer("USER") }), "post", "/ai/actions/{id}/cancel", 200)
+    await expectContract(call("post", `/ai/actions/${second.id}/cancel`, { token: bearer("USER") }), "post", "/ai/actions/{id}/cancel", 409)
+    await expectContract(call("post", "/ai/actions/abc/cancel", { token: bearer("USER") }), "post", "/ai/actions/{id}/cancel", 400)
+    await expectContract(call("post", `/ai/actions/${second.id}/cancel`), "post", "/ai/actions/{id}/cancel", 401)
+    await expectContract(call("post", `/ai/actions/${second.id}/cancel`, { token: bearer("AGENT") }), "post", "/ai/actions/{id}/cancel", 404)
+    vi.stubEnv("AI_TICKET_ACTIONS", "false")
+    await expectContract(call("post", `/ai/actions/${second.id}/confirm`, { token: bearer("USER") }), "post", "/ai/actions/{id}/confirm", 503)
   })
 })
 
@@ -372,7 +408,7 @@ describe("Erreurs communes : 429 et 500 respectent le contrat", () => {
 describe("Les rôles documentés sont les rôles réellement appliqués", () => {
   it("chaque opération autorise exactement les rôles de x-roles", async () => {
     const operations = listOperations(contract)
-    expect(operations.length).toBe(19)
+    expect(operations.length).toBe(22)
     for (const { method, path, op } of operations) {
       // Appel sans effet de bord : id inexistant, body vide (rejeté ou sans cible).
       const url = path.replace("{id}", "999999")
@@ -399,7 +435,7 @@ describe("Couverture : chaque opération du contrat a été exercée", () => {
   // S'appuie sur les tests ci-dessus, exécutés dans l'ordre du fichier : chaque opération doit avoir
   // reçu au moins une vraie réponse de succès conforme au contrat. Une route documentée mais absente
   // (qui répondrait 404) est donc détectée ici.
-  it("a obtenu une réponse de succès pour les 19 opérations", () => {
+  it("a obtenu une réponse de succès pour les 22 opérations", () => {
     const expected = listOperations(contract).map(({ method, path }) => `${method} ${path}`).sort()
     expect([...succeeded].sort()).toEqual(expected)
   })

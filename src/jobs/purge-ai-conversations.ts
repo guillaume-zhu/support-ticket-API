@@ -32,12 +32,12 @@ async function main() {
 
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) })
   try {
-    const { conversations, messages, cutoff } = await aiConversationsService(prisma).purgeInactive({ retentionDays, dryRun })
+    const { conversations, messages, pendingActions, cutoff } = await aiConversationsService(prisma).purgeInactive({ retentionDays, dryRun })
     console.log(
       `${dryRun ? "[simulation] " : ""}Conversations IA sans activité depuis plus de ${retentionDays} jours (dernière activité avant ${cutoff.toISOString()}) : ` +
         (dryRun
-          ? `${conversations} conversation(s) et ${messages} message(s) seraient supprimés.`
-          : `${conversations} conversation(s) supprimée(s), ${messages} message(s) supprimé(s) avec elles.`),
+          ? `${conversations} conversation(s) et ${messages} message(s) seraient supprimés ; ${pendingActions} action(s) proposée(s) périmée(s) seraient supprimées.`
+          : `${conversations} conversation(s) supprimée(s), ${messages} message(s) supprimé(s) avec elles ; ${pendingActions} action(s) proposée(s) périmée(s) supprimée(s).`),
     )
   } catch {
     // Message générique : l'erreur d'origine peut contenir des informations de connexion.

@@ -1,9 +1,9 @@
 import type { PrismaClient } from "../../generated/prisma/client.js"
 import type { AuthenticatedUser } from "../../middlewares/auth.js"
-import type { ChatMessage } from "../../utils/validation.js"
+import { AI_MAX_PROPOSALS_PER_REQUEST, type ChatMessage } from "../../utils/validation.js"
 import { ticketsService } from "../tickets/tickets.service.js"
-import { SYSTEM_PROMPT, SYSTEM_PROMPT_WITH_TICKETS } from "./ai.prompt.js"
-import { executeTicketTool, TICKET_TOOLS, type TicketToolName } from "./ai.tools.js"
+import { SYSTEM_PROMPT, SYSTEM_PROMPT_WITH_ACTIONS, SYSTEM_PROMPT_WITH_TICKETS } from "./ai.prompt.js"
+import { executeTicketTool, toolsFor, type Proposal, type TicketToolName } from "./ai.tools.js"
 
 // Appel du fournisseur d'IA (OpenAI ou DeepSeek) avec l'API « Responses », que les deux documentent.
 // Un seul point d'appel : si le format change, c'est ici et seulement ici qu'il faut intervenir.
@@ -35,6 +35,9 @@ export type AiConfig = {
   // Autoriser l'assistant à consulter les tickets (outils list_tickets et get_ticket). Désactivé par défaut :
   // activer cette option envoie au fournisseur le contenu des tickets que l'utilisateur a le droit de voir.
   ticketTools: boolean
+  // Autoriser l'assistant à PROPOSER de créer un ticket ou d'en changer le statut. Exige ticketTools. Désactivé par défaut.
+  // C'est aussi un coupe-circuit : désactivé, aucune confirmation n'est exécutée, même pour une action déjà en attente.
+  ticketActions: boolean
 }
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 2000
@@ -95,6 +98,14 @@ export function parseAiConfig(env: Record<string, string | undefined>): AiConfig
     throw new Error("AI_TICKET_TOOLS doit valoir true ou false")
   }
 
+  const ticketActions = env.AI_TICKET_ACTIONS
+  if (ticketActions && ticketActions !== "true" && ticketActions !== "false") {
+    throw new Error("AI_TICKET_ACTIONS doit valoir true ou false")
+  }
+  if (ticketActions === "true" && ticketTools !== "true") {
+    throw new Error("AI_TICKET_ACTIONS=true exige AI_TICKET_TOOLS=true")
+  }
+
   return {
     provider: provider as AiProvider,
     apiKey,
@@ -104,6 +115,7 @@ export function parseAiConfig(env: Record<string, string | undefined>): AiConfig
     timeoutMs: readInteger("AI_TIMEOUT_MS", env.AI_TIMEOUT_MS, 5000, 120_000, DEFAULT_TIMEOUT_MS),
     reasoningEffort: (effort || undefined) as AiConfig["reasoningEffort"],
     ticketTools: ticketTools === "true",
+    ticketActions: ticketActions === "true",
   }
 }
 
@@ -111,18 +123,18 @@ export function parseAiConfig(env: Record<string, string | undefined>): AiConfig
 // `input` est la conversation, suivie (pendant la boucle d'outils) des éléments renvoyés par le modèle et des
 // résultats d'outils. Seuls les paramètres communs aux deux fournisseurs sont envoyés ; store: false demande de ne pas
 // conserver la réponse côté OpenAI (DeepSeek ignore ce paramètre). Aucune donnée d'identité n'est transmise.
-export function buildResponsesRequest(config: AiConfig, input: unknown[]) {
+export function buildResponsesRequest(config: AiConfig, input: unknown[], user?: Pick<AuthenticatedUser, "role">) {
   return {
     url: `${config.baseUrl}/responses`,
     headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
     body: {
       model: config.model,
-      instructions: config.ticketTools ? SYSTEM_PROMPT_WITH_TICKETS : SYSTEM_PROMPT,
+      instructions: config.ticketActions ? SYSTEM_PROMPT_WITH_ACTIONS : config.ticketTools ? SYSTEM_PROMPT_WITH_TICKETS : SYSTEM_PROMPT,
       input,
       max_output_tokens: config.maxOutputTokens,
       store: false,
       ...(config.ticketTools && {
-        tools: TICKET_TOOLS.map((tool) => ({ ...tool, ...(PROVIDERS[config.provider].declaresStrictFalse && { strict: false }) })),
+        tools: toolsFor(user, config.ticketActions).map((tool) => ({ ...tool, ...(PROVIDERS[config.provider].declaresStrictFalse && { strict: false }) })),
       }),
       ...(config.reasoningEffort && { reasoning: { effort: config.reasoningEffort } }),
     },
@@ -171,10 +183,20 @@ export function extractReply(body: unknown): string | null {
   return characters.length > MAX_REPLY_CHARS ? `${characters.slice(0, MAX_REPLY_CHARS).join("")}…` : text
 }
 
+// Les actions proposées par l'assistant sont-elles activées (AI_TICKET_ACTIONS) ? Une configuration invalide compte comme « non ».
+export function aiActionsEnabled(env: Record<string, string | undefined> = process.env) {
+  try {
+    return parseAiConfig(env)?.ticketActions ?? false
+  } catch {
+    return false
+  }
+}
+
 export type AiChatResult =
   // toolsUsed : outils exécutés avec succès par le serveur (sans doublon, dans l'ordre du premier usage).
   // Ni un simple appel proposé par le modèle, ni un appel refusé ou en erreur ; ce n'est pas une preuve que la réponse est exacte.
-  | { status: "OK"; reply: string; toolsUsed: TicketToolName[] }
+  // proposals : intentions d'action (jamais exécutées) que l'appelant enregistre « en attente » si la réponse aboutit.
+  | { status: "OK"; reply: string; toolsUsed: TicketToolName[]; proposals: Proposal[] }
   | { status: "NOT_CONFIGURED" }
   | { status: "PROVIDER_FAILED" }
 
@@ -185,8 +207,8 @@ function failed(reason: string): AiChatResult {
 }
 
 // Un appel au fournisseur : renvoie la réponse décodée, ou null (déjà journalisé) en cas d'échec.
-async function callProvider(config: AiConfig, input: unknown[], timeoutMs: number): Promise<unknown | null> {
-  const request = buildResponsesRequest(config, input)
+async function callProvider(config: AiConfig, input: unknown[], timeoutMs: number, user: AuthenticatedUser): Promise<unknown | null> {
+  const request = buildResponsesRequest(config, input, user)
   try {
     const response = await fetch(request.url, {
       method: "POST",
@@ -218,7 +240,8 @@ export function aiService(prisma: PrismaClient) {
   const tickets = ticketsService(prisma)
 
   return {
-    chat: async (messages: ChatMessage[], user: AuthenticatedUser): Promise<AiChatResult> => {
+    // proposalBudget : nombre maximal de propositions acceptées pour cette requête (le quota d'actions en attente restant).
+    chat: async (messages: ChatMessage[], user: AuthenticatedUser, options: { proposalBudget?: number } = {}): Promise<AiChatResult> => {
       let config: AiConfig | null
       try {
         config = parseAiConfig(process.env)
@@ -231,12 +254,14 @@ export function aiService(prisma: PrismaClient) {
       const startedAt = Date.now()
       const input: unknown[] = messages.map(({ role, content }) => ({ role, content }))
       const toolsUsed: TicketToolName[] = []
+      const proposals: Proposal[] = []
+      const proposalBudget = Math.min(options.proposalBudget ?? AI_MAX_PROPOSALS_PER_REQUEST, AI_MAX_PROPOSALS_PER_REQUEST)
 
       for (let attempt = 1; attempt <= MAX_PROVIDER_CALLS; attempt++) {
         const remaining = MAX_TOTAL_MS - (Date.now() - startedAt)
         if (remaining < MIN_CALL_BUDGET_MS) return failed("délai global dépassé")
 
-        const body = await callProvider(config, input, Math.min(config.timeoutMs, remaining))
+        const body = await callProvider(config, input, Math.min(config.timeoutMs, remaining), user)
         if (body === null) return { status: "PROVIDER_FAILED" }
         const items = outputItems(body)
         if (items === null || responseFailed(body)) return failed("réponse du fournisseur inutilisable (échec ou démesurée)")
@@ -245,7 +270,7 @@ export function aiService(prisma: PrismaClient) {
         if (calls.length === 0) {
           const reply = extractReply(body)
           if (reply === null) return failed("réponse du fournisseur inutilisable (vide, ou plafond de tokens atteint avant le texte)")
-          return { status: "OK", reply, toolsUsed }
+          return { status: "OK", reply, toolsUsed, proposals }
         }
 
         // Le modèle propose des appels de fonctions. Plusieurs garde-fous AVANT d'exécuter quoi que ce soit :
@@ -270,9 +295,23 @@ export function aiService(prisma: PrismaClient) {
             output = JSON.stringify({ ok: false, error: "trop d'appels d'outils dans le même tour" })
           } else {
             // L'utilisateur est celui du JWT, jamais une valeur donnée par le modèle.
-            const execution = await executeTicketTool(call.name, call.arguments, user, tickets)
+            const execution = await executeTicketTool(call.name, call.arguments, user, tickets, { actions: config.ticketActions })
             output = execution.output
-            if (execution.tool && !toolsUsed.includes(execution.tool)) toolsUsed.push(execution.tool)
+            let used = execution.tool
+            if (execution.proposal) {
+              // Une proposition n'écrit rien : on retient l'intention, dans la limite du quota, sans doublon.
+              const key = JSON.stringify([execution.proposal.kind, execution.proposal.payload])
+              if (proposals.length >= proposalBudget) {
+                output = JSON.stringify({ ok: false, error: "trop d'actions proposées ou en attente : l'utilisateur doit d'abord confirmer ou annuler les précédentes" })
+                used = null
+              } else if (proposals.some((existing) => JSON.stringify([existing.kind, existing.payload]) === key)) {
+                output = JSON.stringify({ ok: false, error: "cette action a déjà été proposée" })
+                used = null
+              } else {
+                proposals.push(execution.proposal)
+              }
+            }
+            if (used && !toolsUsed.includes(used)) toolsUsed.push(used)
           }
           input.push({ type: "function_call_output", call_id: call.call_id, output })
         }

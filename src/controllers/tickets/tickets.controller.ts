@@ -91,17 +91,15 @@ export function ticketsController(prisma: PrismaClient) {
         return res.status(400).json({ error: "status invalide" })
       }
 
-      const ticket = await prisma.ticket.findUnique({ where: { id } })
-
-      if (!ticket) {
+      // La règle de rôle est vérifiée dans le service (la route la vérifie aussi, en amont).
+      const result = await service.updateStatus(res.locals.authUser as AuthenticatedUser, id, status)
+      if (result.status === "FORBIDDEN") {
+        return res.status(403).json({ error: "Accès interdit" })
+      }
+      if (result.status !== "OK") {
         return res.status(404).json({ error: "ticket introuvable" })
       }
-
-      const updated = await prisma.ticket.update({
-        where: { id },
-        data: { status },
-      })
-      return res.json(updated)
+      return res.json(result.ticket)
     },
   }
 }

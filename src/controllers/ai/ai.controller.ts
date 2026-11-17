@@ -32,11 +32,15 @@ export function aiController(prisma: PrismaClient) {
           return res.status(404).json({ error: "conversation introuvable" })
         case "CONVERSATION_FULL":
           return res.status(409).json({ error: "conversation pleine : en commencer une nouvelle" })
+        case "TOO_MANY_PENDING_ACTIONS":
+          return res.status(409).json({ error: "trop d'actions en attente : confirmez ou annulez les précédentes" })
         case "TOO_MANY_CONVERSATIONS":
           return res.status(409).json({ error: "trop de conversations : en supprimer une avant d'en créer une nouvelle" })
         case "OK":
           // toolsUsed : noms des outils exécutés AVEC SUCCÈS par le serveur (jamais leurs arguments ni leur contenu).
-          return res.json({ conversationId: result.conversationId, reply: result.reply, toolsUsed: result.toolsUsed })
+          // pendingActions : actions proposées, EN ATTENTE ; leur résumé est écrit par le serveur. Rien n'est modifié tant que
+          // l'utilisateur ne les a pas confirmées (POST /ai/actions/:id/confirm).
+          return res.json({ conversationId: result.conversationId, reply: result.reply, toolsUsed: result.toolsUsed, pendingActions: result.pendingActions })
       }
     },
   }

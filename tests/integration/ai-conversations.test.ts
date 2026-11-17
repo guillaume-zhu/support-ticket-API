@@ -99,7 +99,7 @@ describe("Démarrer et poursuivre une conversation", () => {
     fetchMock.mockResolvedValueOnce(providerReply("IN_PROGRESS signifie que le ticket est pris en charge."))
     const response = await chat(alice, ask("  Que signifie IN_PROGRESS ?  "))
     expect(response.status).toBe(200)
-    expect(response.body).toEqual({ conversationId: expect.stringMatching(/^[0-9a-f-]{36}$/), reply: "IN_PROGRESS signifie que le ticket est pris en charge.", toolsUsed: [] })
+    expect(response.body).toEqual({ conversationId: expect.stringMatching(/^[0-9a-f-]{36}$/), reply: "IN_PROGRESS signifie que le ticket est pris en charge.", toolsUsed: [], pendingActions: [] })
 
     const conversation = await prisma.aiConversation.findUniqueOrThrow({ where: { id: response.body.conversationId }, include: { messages: { orderBy: { id: "asc" } } } })
     expect(conversation).toMatchObject({ userId: alice.id, title: "Que signifie IN_PROGRESS ?" })
@@ -544,7 +544,7 @@ describe("Compatibilité avec le function calling", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: "completed", output: [functionCall("c1", "get_ticket", { id: ticket.id })] }), { status: 200 }))
       .mockResolvedValueOnce(providerReply("Votre ticket concerne une connexion impossible."))
     const response = await chat(alice, ask("Résume mon ticket"))
-    expect(response.body).toEqual({ conversationId: expect.any(String), reply: "Votre ticket concerne une connexion impossible.", toolsUsed: ["get_ticket"] })
+    expect(response.body).toEqual({ conversationId: expect.any(String), reply: "Votre ticket concerne une connexion impossible.", toolsUsed: ["get_ticket"], pendingActions: [] })
 
     const stored = await prisma.aiMessage.findMany({ orderBy: { id: "asc" } })
     expect(stored.map((message) => [message.role, message.toolsUsed])).toEqual([["USER", []], ["ASSISTANT", ["get_ticket"]]])

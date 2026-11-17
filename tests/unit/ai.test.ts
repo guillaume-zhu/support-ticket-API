@@ -22,7 +22,7 @@ describe("Configuration de l'assistant", () => {
   it("applique les valeurs par défaut et l'adresse de chaque fournisseur", () => {
     expect(parseAiConfig(base)).toEqual({
       provider: "openai", apiKey: KEY, model: "test-model", baseUrl: "https://api.openai.com/v1",
-      maxOutputTokens: 2000, timeoutMs: 30_000, reasoningEffort: undefined, ticketTools: false,
+      maxOutputTokens: 2000, timeoutMs: 30_000, reasoningEffort: undefined, ticketTools: false, ticketActions: false,
     })
     expect(parseAiConfig({ ...base, AI_PROVIDER: "deepseek" })?.baseUrl).toBe("https://api.deepseek.com")
   })
@@ -71,6 +71,15 @@ describe("Configuration de l'assistant", () => {
       parseAiConfig({ ...base, AI_BASE_URL: "https://eu.api.openai.com/v1/", AI_MAX_OUTPUT_TOKENS: "16", AI_TIMEOUT_MS: "5000", AI_REASONING_EFFORT: "none" }),
     ).toMatchObject({ baseUrl: "https://eu.api.openai.com/v1", maxOutputTokens: 16, timeoutMs: 5000, reasoningEffort: "none" })
     expect(parseAiConfig({ ...base, AI_MAX_OUTPUT_TOKENS: "8000", AI_TIMEOUT_MS: "120000" })).toMatchObject({ maxOutputTokens: 8000, timeoutMs: 120_000 })
+  })
+
+  it("garde les actions désactivées par défaut, refuse une valeur ambiguë et exige la consultation des tickets", () => {
+    expect(parseAiConfig(base)?.ticketActions).toBe(false)
+    expect(parseAiConfig({ ...base, AI_TICKET_ACTIONS: "false" })?.ticketActions).toBe(false)
+    expect(parseAiConfig({ ...base, AI_TICKET_TOOLS: "true", AI_TICKET_ACTIONS: "true" })?.ticketActions).toBe(true)
+    for (const value of ["1", "yes", "TRUE", "oui"]) expect(() => parseAiConfig({ ...base, AI_TICKET_ACTIONS: value })).toThrow("AI_TICKET_ACTIONS")
+    expect(() => parseAiConfig({ ...base, AI_TICKET_ACTIONS: "true" })).toThrow("AI_TICKET_TOOLS")
+    expect(parseAiConfig({ AI_TICKET_ACTIONS: "true" })).toBeNull()
   })
 
   it("garde la consultation des tickets désactivée par défaut et refuse une valeur ambiguë", () => {

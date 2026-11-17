@@ -2,6 +2,8 @@ import { defaultRateLimits as limits } from "../middlewares/rate-limit.js"
 import { ACTION_TOKEN_LENGTH, PASSWORD_MIN_LENGTH } from "../utils/credentials.js"
 import { MAX_JWT_LENGTH } from "../utils/jwt.js"
 import {
+  AI_ACTION_KINDS,
+  AI_ACTION_TTL_MINUTES,
   AUDIT_ACTIONS,
   CHAT_MESSAGE_MAX_LENGTH,
   CHAT_ROLES,
@@ -47,6 +49,7 @@ type Operation = {
   roles: "public" | Role[]
   parameters?: object[]
   requestBody?: string // nom du schéma du body JSON
+  optionalBody?: boolean // body facultatif (required: false)
   responses: Record<string, object>
 }
 
@@ -67,7 +70,7 @@ function operation(o: Operation) {
     "x-roles": o.roles === "public" ? [] : o.roles,
     ...(o.parameters && { parameters: o.parameters }),
     ...(o.requestBody && {
-      requestBody: { required: true, content: json(ref(o.requestBody)) },
+      requestBody: { required: !o.optionalBody, content: json(ref(o.requestBody)) },
     }),
     responses: {
       ...o.responses,
@@ -112,6 +115,14 @@ const conversationIdParameter = {
   in: "path",
   required: true,
   description: "Identifiant de la conversation (uuid).",
+  schema: { type: "string", format: "uuid" },
+}
+
+const actionIdParameter = {
+  name: "id",
+  in: "path",
+  required: true,
+  description: "Identifiant de l'action proposée (uuid).",
   schema: { type: "string", format: "uuid" },
 }
 
@@ -441,7 +452,9 @@ export const openApiDocument = {
           "",
           "L'assistant explique le fonctionnement de l'application et des tickets (statuts, rôles) et propose des pistes de résolution générales ; il refuse poliment les demandes sans rapport avec le support.",
           "",
-          "**Consultation des tickets (optionnelle)** : si le serveur active `AI_TICKET_TOOLS`, l'assistant peut lire les tickets avec deux outils, `list_tickets` et `get_ticket`. Le serveur les exécute avec les droits de l'utilisateur authentifié (un `USER` ne voit que ses tickets), jamais avec ceux que le modèle annonce. Sinon, l'assistant n'a accès à aucun ticket. **Dans tous les cas, il ne peut ni créer, ni modifier, ni clore un ticket.** Le champ `toolsUsed` de la réponse liste les outils que le serveur a exécutés avec succès (voir sa description).",
+          "**Actions proposées (optionnelles, `AI_TICKET_ACTIONS`)** : l'assistant peut seulement PROPOSER de créer un ticket ou de changer un statut. La réponse contient alors `pendingActions` : rien n'est écrit tant que vous n'avez pas confirmé par `POST /ai/actions/{id}/confirm` (10 minutes de validité, usage unique, 5 actions en attente au plus). Le résumé de chaque action est écrit par le serveur.",
+          "",
+          "**Consultation des tickets (optionnelle)** : si le serveur active `AI_TICKET_TOOLS`, l'assistant peut lire les tickets avec deux outils, `list_tickets` et `get_ticket`. Le serveur les exécute avec les droits de l'utilisateur authentifié (un `USER` ne voit que ses tickets), jamais avec ceux que le modèle annonce. Sinon, l'assistant n'a accès à aucun ticket. **Il ne peut jamais créer, modifier ni clore un ticket de lui-même : il peut seulement le proposer (voir ci-dessus).** Le champ `toolsUsed` de la réponse liste les outils que le serveur a exécutés avec succès (voir sa description).",
           "",
           `Seuls le texte de votre message et la réponse finale de l'assistant sont enregistrés (jamais les appels d'outils, leurs résultats ni le raisonnement du modèle). Les conversations ne sont lisibles que par leur propriétaire, vous pouvez les supprimer à tout moment, et elles sont supprimées automatiquement après ${CONVERSATION_RETENTION_DEFAULT_DAYS} jours (par défaut) sans activité, lors d'un nettoyage quotidien : une conversation peut donc rester accessible quelques heures après ce délai. Chaque requête envoie au fournisseur les ${CONVERSATION_CONTEXT_MAX_MESSAGES} derniers messages au plus (${CONVERSATION_CONTEXT_MAX_CHARS} caractères) ; les plus anciens restent consultables mais ne sont plus transmis. Limites : ${CONVERSATION_MAX_PER_USER} conversations par utilisateur et ${CONVERSATION_MAX_MESSAGES} messages par conversation.`,
           "",
@@ -454,7 +467,7 @@ export const openApiDocument = {
           "400": errorResponse("Message ou conversationId invalide, champ inconnu (l'historique, les rôles et les résultats d'outils ne peuvent pas être envoyés)."),
           "401": errorResponse("Authentification requise."),
           "404": errorResponse("Conversation introuvable (inexistante, ou appartenant à un autre utilisateur : les deux cas sont indiscernables)."),
-          "409": errorResponse("Conversation pleine, ou trop de conversations : en supprimer une. Le fournisseur n'est pas appelé."),
+          "409": errorResponse("Conversation pleine, trop de conversations (en supprimer une), ou trop d'actions en attente (en confirmer ou en annuler). Le fournisseur n'est pas appelé dans les deux premiers cas."),
           "502": errorResponse("Le fournisseur d'IA a échoué (clé refusée, quota, délai dépassé, réponse inutilisable). Aucun détail du fournisseur n'est transmis et rien n'est enregistré."),
           "503": errorResponse("Assistant non configuré sur ce serveur."),
         },
@@ -507,6 +520,64 @@ export const openApiDocument = {
           "400": errorResponse("Identifiant invalide."),
           "401": errorResponse("Authentification requise."),
           "404": errorResponse("Conversation introuvable (inexistante ou appartenant à un autre utilisateur)."),
+        },
+      }),
+    },
+    "/ai/actions": {
+      get: operation({
+        tag: "Assistant",
+        operationId: "listPendingActions",
+        summary: "Lister mes actions proposées en attente",
+        description:
+          "Renvoie vos actions proposées par l'assistant, en attente et non expirées. Un utilisateur ne voit que les siennes. Rien n'est exécuté tant que vous n'avez pas confirmé.",
+        roles: ["SUPER_ADMIN", "ADMIN", "AGENT", "USER"],
+        responses: {
+          "200": { description: "Actions en attente.", content: json({ type: "object", properties: { data: { type: "array", items: ref("PendingAction") } }, required: ["data"], additionalProperties: false }) },
+          "401": errorResponse("Authentification requise."),
+        },
+      }),
+    },
+    "/ai/actions/{id}/confirm": {
+      post: operation({
+        tag: "Assistant",
+        operationId: "confirmPendingAction",
+        summary: "Confirmer une action proposée par l'assistant",
+        description: [
+          "Exécute l'action avec **vos** droits actuels, revérifiés à cet instant (propriétaire, état, expiration, droits, ticket). Usage unique : une seconde confirmation reçoit `409`. Pour un changement de statut, le ticket doit encore avoir le statut vu à la proposition (sinon `409`, l'action est annulée et rien n'est modifié).",
+          "",
+          "**Clôture** : `resolutionConfirmed: true` est exigé pour passer un ticket à CLOSED (sinon `400` et l'action reste en attente).",
+          "",
+          "Si `AI_TICKET_ACTIONS` est désactivé, `503` : plus aucune action n'est exécutée.",
+        ].join("\n"),
+        roles: ["SUPER_ADMIN", "ADMIN", "AGENT", "USER"],
+        parameters: [actionIdParameter],
+        requestBody: "ConfirmActionRequest",
+        optionalBody: true,
+        responses: {
+          "200": { description: "Action exécutée.", content: json(ref("ConfirmActionResponse")) },
+          "400": errorResponse("Identifiant invalide, champ inconnu, ou `resolutionConfirmed: true` manquant pour une clôture."),
+          "401": errorResponse("Authentification requise."),
+          "403": errorResponse("Vos droits ne permettent plus cette action : elle est annulée."),
+          "404": errorResponse("Action introuvable (inexistante ou appartenant à un autre utilisateur), ou ticket disparu (action annulée)."),
+          "409": errorResponse("Action déjà traitée, expirée, invalide, ou ticket modifié depuis la proposition (action annulée)."),
+          "503": errorResponse("Actions de l'assistant désactivées sur ce serveur."),
+        },
+      }),
+    },
+    "/ai/actions/{id}/cancel": {
+      post: operation({
+        tag: "Assistant",
+        operationId: "cancelPendingAction",
+        summary: "Annuler une action proposée par l'assistant",
+        description: "Annule une de vos actions en attente : rien n'est modifié. Toujours possible, même si les actions sont désactivées.",
+        roles: ["SUPER_ADMIN", "ADMIN", "AGENT", "USER"],
+        parameters: [actionIdParameter],
+        responses: {
+          "200": { description: "Action annulée.", content: json({ type: "object", properties: { action: ref("ActionResult") }, required: ["action"], additionalProperties: false }) },
+          "400": errorResponse("Identifiant invalide ou corps non vide."),
+          "401": errorResponse("Authentification requise."),
+          "404": errorResponse("Action introuvable (inexistante ou appartenant à un autre utilisateur)."),
+          "409": errorResponse("Action déjà traitée."),
         },
       }),
     },
@@ -615,20 +686,60 @@ export const openApiDocument = {
           toolsUsed: {
             type: "array",
             uniqueItems: true,
-            items: { type: "string", enum: ["list_tickets", "get_ticket"] },
+            items: { type: "string", enum: ["list_tickets", "get_ticket", "propose_create_ticket", "propose_status_change"] },
             description:
               "Outils que le serveur a exécutés AVEC SUCCÈS pour cette réponse : arguments valides, requête lancée avec les droits de l'utilisateur, résultat transmis au modèle. Un appel simplement proposé par le modèle, refusé (arguments invalides, outil inconnu, trop d'appels) ou en erreur n'y figure pas. Un ticket introuvable ou non accessible compte comme une consultation réussie qui n'a rien trouvé. Vide si aucune consultation n'a abouti. Cela ne prouve pas que la réponse de l'assistant est exacte. Seuls les noms sont indiqués, jamais les arguments ni le contenu.",
           },
+          pendingActions: {
+            type: "array",
+            items: ref("PendingAction"),
+            description: "Actions PROPOSÉES par l'assistant, en attente de votre confirmation. Rien n'a été modifié. Vide si aucune proposition.",
+          },
         },
-        required: ["conversationId", "reply", "toolsUsed"],
+        required: ["conversationId", "reply", "toolsUsed", "pendingActions"],
         additionalProperties: false,
         examples: [
           {
             conversationId: "7f3c0b1e-2d4a-4c8e-9a51-6b0d2f1e8a37",
             reply: "Le ticket 12 « Connexion impossible » est en cours de traitement (statut IN_PROGRESS).",
             toolsUsed: ["get_ticket"],
+            pendingActions: [],
           },
         ],
+      },
+      PendingAction: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          kind: { type: "string", enum: [...AI_ACTION_KINDS] },
+          summary: { type: "string", description: "Description de l'action, écrite par le serveur (jamais par le modèle)." },
+          expiresAt: { type: "string", format: "date-time", description: `Fin de validité (${AI_ACTION_TTL_MINUTES} minutes après la proposition).` },
+        },
+        required: ["id", "kind", "summary", "expiresAt"],
+        additionalProperties: false,
+        examples: [{ id: "7f3c0b1e-2d4a-4c8e-9a51-6b0d2f1e8a37", kind: "CHANGE_STATUS", summary: "Passer le ticket n°12 « Connexion impossible » de OPEN à IN_PROGRESS", expiresAt: "2026-11-16T09:10:00.000Z" }],
+      },
+      ConfirmActionRequest: {
+        type: "object",
+        properties: { resolutionConfirmed: { type: "boolean", description: "À `true` pour attester que le problème est résolu : exigé pour clôturer un ticket." } },
+        additionalProperties: false,
+        examples: [{ resolutionConfirmed: true }],
+      },
+      ActionResult: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          kind: { type: "string", enum: [...AI_ACTION_KINDS] },
+          status: { type: "string", enum: ["CONFIRMED", "CANCELLED"] },
+        },
+        required: ["id", "kind", "status"],
+        additionalProperties: false,
+      },
+      ConfirmActionResponse: {
+        type: "object",
+        properties: { action: ref("ActionResult"), ticket: ref("Ticket") },
+        required: ["action", "ticket"],
+        additionalProperties: false,
       },
       Conversation: {
         type: "object",
@@ -663,7 +774,7 @@ export const openApiDocument = {
           id: { type: "integer", minimum: 1 },
           role: { type: "string", enum: [...CHAT_ROLES], description: "Auteur du message : l'utilisateur ou l'assistant." },
           content: { type: "string", description: "Texte du message (réponse finale pour l'assistant)." },
-          toolsUsed: { type: "array", uniqueItems: true, items: { type: "string", enum: ["list_tickets", "get_ticket"] }, description: "Outils exécutés avec succès pour produire cette réponse (vide pour un message de l'utilisateur)." },
+          toolsUsed: { type: "array", uniqueItems: true, items: { type: "string", enum: ["list_tickets", "get_ticket", "propose_create_ticket", "propose_status_change"] }, description: "Outils exécutés avec succès pour produire cette réponse (vide pour un message de l'utilisateur)." },
           createdAt: { type: "string", format: "date-time" },
         },
         required: ["id", "role", "content", "toolsUsed", "createdAt"],

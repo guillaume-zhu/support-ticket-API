@@ -1,4 +1,4 @@
-import type { AuditAction, Prisma, PrismaClient, Role } from "../../generated/prisma/client.js"
+import type { AuditAction, Prisma, PrismaClient, Role, TicketStatus } from "../../generated/prisma/client.js"
 import type { AuditLogListOptions } from "../../utils/validation.js"
 
 // Qui agit : un compte identifié (id + rôle au moment de l'action), ou personne (script CLI).
@@ -35,6 +35,15 @@ export type AuditEvent =
       metadata: { revokedSessions: number }
     }
   | { action: "SUPER_ADMIN_BOOTSTRAPPED"; actor: null; targetUserId: number; metadata: { source: "cli" } }
+  // Actions exécutées APRÈS confirmation de l'utilisateur. L'acteur est l'utilisateur qui a confirmé ; le ticket concerné est
+  // dans les métadonnées (jamais son titre ni sa description).
+  | { action: "ASSISTANT_TICKET_CREATED"; actor: AuditActor; targetUserId: number; metadata: { pendingActionId: string; ticketId: number } }
+  | {
+      action: "ASSISTANT_TICKET_STATUS_CHANGED"
+      actor: AuditActor
+      targetUserId: number
+      metadata: { pendingActionId: string; ticketId: number; statusBefore: TicketStatus; statusAfter: TicketStatus }
+    }
 
 // Ajouter une ligne au registre. Passer le client `tx` d'une transaction pour que l'audit réussisse
 // ou échoue avec l'action métier (atomicité) ; un simple `prisma` écrit hors transaction.

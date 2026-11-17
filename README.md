@@ -279,8 +279,9 @@ spécialisé dans le support et l'utilisation de l'application (statuts, rôles,
 de formuler un problème, pistes de résolution générales). Il refuse poliment le reste.
 
 Par défaut, **l'assistant n'a accès à aucun ticket**. Avec `AI_TICKET_TOOLS=true`, il peut
-en **lire** (voir « Consultation des tickets »). Dans tous les cas, il ne peut ni créer,
-ni modifier, ni clore un ticket, et son message système lui interdit d'en inventer.
+en **lire** (voir « Consultation des tickets »). Avec `AI_TICKET_ACTIONS=true` en plus, il peut
+**proposer** de créer un ticket ou de changer un statut (voir « Actions proposées »). Dans tous les cas,
+il n'écrit jamais lui-même : seule votre confirmation HTTP exécute, et son message système lui interdit d'inventer un ticket.
 
 ```json
 { "message": "Que signifie le statut IN_PROGRESS ?" }
@@ -316,6 +317,7 @@ Dans `.env` (jamais dans Git) :
 | `AI_TIMEOUT_MS` | optionnel, 30 000 par défaut : délai maximal avant `502` |
 | `AI_REASONING_EFFORT` | optionnel : `none`, `low`, `medium` ou `high` |
 | `AI_CONVERSATION_RETENTION_DAYS` | optionnel, `90` par défaut : jours d'inactivité avant le nettoyage d'une conversation (utilisé par la tâche planifiée, voir « Nettoyage quotidien ») |
+| `AI_TICKET_ACTIONS` | optionnel, `false` par défaut : `true` (exige `AI_TICKET_TOOLS=true`) permet à l'assistant de proposer des actions ; remettre `false` coupe immédiatement toute exécution, même des actions déjà en attente |
 | `AI_TICKET_TOOLS` | optionnel, `false` par défaut : `true` autorise la consultation des tickets (le contenu des tickets visibles est alors envoyé au fournisseur) |
 
 Sans les trois premières variables, l'assistant est désactivé et la route répond `503`. Une
@@ -402,6 +404,32 @@ Sur un serveur sans dépendances de développement, utiliser la version compilé
 **Limite assumée** : tant que la tâche n'est pas passée, une conversation reste lisible, même après ses 90 jours
 d'inactivité (potentiellement jusqu'à environ 24 heures de plus, ou davantage si la tâche échoue ou n'est pas configurée).
 Le seul moyen de suppression immédiate est `DELETE /ai/conversations/:id`.
+
+### Actions proposées (`AI_TICKET_ACTIONS=true`)
+
+L'assistant dispose de deux outils de **proposition** : `propose_create_ticket` et `propose_status_change` (ce dernier
+déclaré au seul personnel). Ils n'écrivent rien. Le serveur enregistre l'intention dans `AiPendingAction`, **dans la même
+transaction que l'échange**, et la réponse du chat contient `pendingActions` (`id`, `kind`, `summary`, `expiresAt`).
+Le résumé est écrit par le serveur, jamais par le modèle.
+
+```
+POST /ai/chat                      → propose (rien n'est écrit)
+GET  /ai/actions                   → mes actions en attente et non expirées
+POST /ai/actions/:id/confirm       → exécute avec MES droits, revérifiés (corps facultatif : { "resolutionConfirmed": true })
+POST /ai/actions/:id/cancel        → annule (toujours possible)
+```
+
+Règles : validité de **10 minutes** ; usage unique ; **5 actions en attente** au plus par utilisateur (les actions
+périmées ne comptent pas) et 3 propositions par requête ; propriétaire seul (l'action d'un autre répond `404`) ; la clôture
+d'un ticket exige `resolutionConfirmed: true` ; un statut modifié depuis la proposition (PATCH, autre agent) annule l'action
+(`409`) grâce à une mise à jour conditionnelle atomique ; un rôle perdu donne `403`. L'exécution, l'audit
+(`ASSISTANT_TICKET_CREATED`, `ASSISTANT_TICKET_STATUS_CHANGED`) et le message de résultat sont écrits dans **une transaction** :
+si l'un échoue, l'action reste en attente. Une action résolue voit son contenu (titre, description, résumé) effacé.
+Le nettoyage quotidien supprime les actions périmées depuis plus d'un jour.
+
+Migration : elle ajoute deux valeurs à l'enum `AuditAction` (`ALTER TYPE ... ADD VALUE`). Ces valeurs ne sont pas
+retirables simplement et ne sont utilisables qu'**après** la validation de la transaction qui les ajoute (le fichier de
+migration ne les utilise pas). PostgreSQL 12 ou plus est requis.
 
 ### Consultation des tickets (`AI_TICKET_TOOLS=true`)
 

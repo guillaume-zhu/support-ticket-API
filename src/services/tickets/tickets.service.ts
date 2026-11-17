@@ -1,6 +1,18 @@
-import { Prisma, type PrismaClient } from "../../generated/prisma/client.js"
+import { Prisma, type PrismaClient, type Role, type TicketStatus } from "../../generated/prisma/client.js"
 import type { AuthenticatedUser } from "../../middlewares/auth.js"
 import { escapeLikePattern, type TicketListOptions } from "../../utils/validation.js"
+
+// Rôles du personnel : ils voient tous les tickets et peuvent changer leur statut. Source UNIQUE de cette règle :
+// la route (requireRoles) et le service (canChangeStatus) la lisent ici, l'assistant IA aussi.
+export const STAFF_ROLES = ["SUPER_ADMIN", "ADMIN", "AGENT"] as const satisfies readonly Role[]
+
+export function canChangeStatus(user: AuthenticatedUser) {
+  return (STAFF_ROLES as readonly Role[]).includes(user.role)
+}
+
+// Client Prisma ordinaire ou client d'une transaction en cours : permet d'écrire le ticket, l'audit et l'action
+// de l'assistant ensemble, en une seule transaction.
+export type DbClient = PrismaClient | Prisma.TransactionClient
 
 // Un USER ne voit que ses tickets ; le personnel voit tout, y compris les tickets sans auteur.
 function visibleTo(user: AuthenticatedUser) {
@@ -57,7 +69,41 @@ export function ticketsService(prisma: PrismaClient) {
       prisma.ticket.findFirst({ where: { id, ...visibleTo(user) } }),
 
     // L'auteur vient toujours de l'identité authentifiée, jamais du body.
-    create: (data: { title: string; description: string }, user: AuthenticatedUser) =>
-      prisma.ticket.create({ data: { ...data, createdById: user.id } }),
+    create: (data: { title: string; description: string }, user: AuthenticatedUser, db: DbClient = prisma) =>
+      db.ticket.create({ data: { ...data, createdById: user.id } }),
+
+    // Changer le statut d'un ticket : réservé au personnel, la règle est vérifiée ICI et non seulement dans la route.
+    // Avec `expectedStatus`, la mise à jour est CONDITIONNELLE et atomique (UPDATE ... WHERE status = <attendu>) :
+    // si quelqu'un a changé le statut entre-temps (PATCH classique, autre agent, autre action), rien n'est écrasé
+    // et le résultat est STALE. Sans lecture préalable : PostgreSQL revérifie la condition sur la ligne verrouillée.
+    updateStatus: async (
+      user: AuthenticatedUser,
+      id: number,
+      status: TicketStatus,
+      options: { expectedStatus?: TicketStatus; db?: DbClient } = {},
+    ): Promise<
+      { status: "OK"; ticket: NonNullable<Awaited<ReturnType<DbClient["ticket"]["findUnique"]>>> } | { status: "FORBIDDEN" | "NOT_FOUND" | "STALE" }
+    > => {
+      if (!canChangeStatus(user)) return { status: "FORBIDDEN" }
+      const db = options.db ?? prisma
+
+      if (options.expectedStatus === undefined) {
+        // Changement sans condition (PATCH classique) : le dernier écrit gagne, comme avant.
+        try {
+          return { status: "OK", ticket: await db.ticket.update({ where: { id }, data: { status } }) }
+        } catch (error) {
+          if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") return { status: "NOT_FOUND" }
+          throw error
+        }
+      }
+
+      const updated = await db.ticket.updateMany({ where: { id, status: options.expectedStatus }, data: { status } })
+      if (updated.count === 1) {
+        // La ligne est verrouillée par notre mise à jour jusqu'à la fin de la transaction : on relit bien notre écriture.
+        return { status: "OK", ticket: await db.ticket.findUniqueOrThrow({ where: { id } }) }
+      }
+      // Aucune ligne modifiée : le ticket n'existe pas, ou son statut n'est plus celui qui était attendu.
+      return (await db.ticket.findUnique({ where: { id }, select: { id: true } })) ? { status: "STALE" } : { status: "NOT_FOUND" }
+    },
   }
 }

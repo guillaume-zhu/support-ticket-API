@@ -87,7 +87,7 @@ describe("Réponse nominale", () => {
 
     const response = await chat(user.token, userMessage("  Que signifie IN_PROGRESS ?  "))
     expect(response.status).toBe(200)
-    expect(response.body).toEqual({ conversationId: expect.any(String), reply: "IN_PROGRESS signifie que le ticket est en cours de traitement.", toolsUsed: [] })
+    expect(response.body).toEqual({ conversationId: expect.any(String), reply: "IN_PROGRESS signifie que le ticket est en cours de traitement.", toolsUsed: [], pendingActions: [] })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [calledUrl, init] = fetchMock.mock.calls[0]!
@@ -135,7 +135,7 @@ describe("Réponse nominale", () => {
       const account = await createUser(role)
       fetchMock.mockResolvedValueOnce(providerReply(`réponse ${role}`))
       const response = await chat(account.token, userMessage("Bonjour"))
-      expect(response.body, role).toEqual({ conversationId: expect.any(String), reply: `réponse ${role}`, toolsUsed: [] })
+      expect(response.body, role).toEqual({ conversationId: expect.any(String), reply: `réponse ${role}`, toolsUsed: [], pendingActions: [] })
     }
     expect(fetchMock).toHaveBeenCalledTimes(4)
   })
@@ -159,7 +159,7 @@ describe("Réponse nominale", () => {
     configure()
     const user = await createUser("USER")
     fetchMock.mockResolvedValueOnce(providerReply("Début de la réponse", { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }))
-    expect((await chat(user.token, userMessage("Bonjour"))).body).toEqual({ conversationId: expect.any(String), reply: "Début de la réponse", toolsUsed: [] })
+    expect((await chat(user.token, userMessage("Bonjour"))).body).toEqual({ conversationId: expect.any(String), reply: "Début de la réponse", toolsUsed: [], pendingActions: [] })
   })
 
   it("plafonne la taille de la réponse renvoyée au client", async () => {

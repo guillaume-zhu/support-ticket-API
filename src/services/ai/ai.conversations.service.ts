@@ -1,6 +1,9 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client.js"
 import type { AuthenticatedUser } from "../../middlewares/auth.js"
 import {
+  AI_ACTION_CLEANUP_GRACE_DAYS,
+  AI_ACTION_TTL_MINUTES,
+  AI_MAX_PENDING_PER_USER,
   CONVERSATION_CONTEXT_MAX_CHARS,
   CONVERSATION_CONTEXT_MAX_MESSAGES,
   CONVERSATION_MAX_MESSAGES,
@@ -8,8 +11,8 @@ import {
   CONVERSATION_TITLE_MAX_CHARS,
   type ChatMessage,
 } from "../../utils/validation.js"
-import { aiService, type AiChatResult } from "./ai.service.js"
-import type { TicketToolName } from "./ai.tools.js"
+import { aiActionsEnabled, aiService, type AiChatResult } from "./ai.service.js"
+import type { Proposal, TicketToolName } from "./ai.tools.js"
 
 // Conversations avec l'assistant, enregistrées dans PostgreSQL.
 // Le client n'envoie que son nouveau message : l'historique, les rôles et la fenêtre de contexte viennent de la base.
@@ -19,6 +22,33 @@ import type { TicketToolName } from "./ai.tools.js"
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 // Espace de verrous PostgreSQL propre aux conversations IA (une clé arbitraire, distincte de celle de la réinitialisation).
 const LOCK_NAMESPACE = 7301
+
+// Phrase fixe, écrite par le serveur et ajoutée à toute réponse qui contient une action proposée : le client (et le lecteur de
+// l'historique) voit la vérité même si le texte du modèle affirmait à tort qu'une action est faite.
+export const PENDING_ACTION_NOTICE = "Action en attente de votre confirmation : rien n'est modifié tant que vous n'avez pas confirmé dans l'application."
+
+// Verrou court, propre à un utilisateur : met en file ses écritures sur les conversations ET sur ses actions en attente.
+export async function lockUserAiWrites(tx: Prisma.TransactionClient, userId: number) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_NAMESPACE}::int, ${userId}::int)`
+}
+
+// Actions en attente qui comptent dans le quota : en attente ET non périmées. Une action périmée depuis plus de dix minutes ne
+// compte plus, même si le nettoyage quotidien ne l'a pas encore supprimée.
+export function activePendingWhere(userId: number, now: Date) {
+  return { userId, status: "PENDING" as const, expiresAt: { gt: now } }
+}
+
+// Ajouter un message écrit par le SERVEUR dans une conversation (résultat d'une confirmation ou d'une annulation) : le modèle
+// connaîtra ainsi le vrai résultat au tour suivant. Sans effet si la conversation n'existe plus ou n'a plus de place.
+export async function appendServerMessage(tx: Prisma.TransactionClient, conversationId: string, text: string) {
+  const conversation = await tx.aiConversation.findUnique({ where: { id: conversationId }, select: { _count: { select: { messages: true } } } })
+  if (!conversation || conversation._count.messages + 1 > CONVERSATION_MAX_MESSAGES) return false
+  await tx.aiMessage.create({ data: { conversationId, role: "ASSISTANT", content: text } })
+  await tx.aiConversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } })
+  return true
+}
+
+export type PendingActionView = { id: string; kind: Proposal["kind"]; summary: string; expiresAt: Date }
 
 // Titre d'une conversation : le début de son premier message, sur une ligne.
 export function deriveTitle(message: string) {
@@ -48,18 +78,21 @@ export function buildContextWindow(history: ChatMessage[], newMessage: ChatMessa
 }
 
 export type ConverseResult =
-  | { status: "OK"; conversationId: string; reply: string; toolsUsed: TicketToolName[] }
+  | { status: "OK"; conversationId: string; reply: string; toolsUsed: TicketToolName[]; pendingActions: PendingActionView[] }
   | Exclude<AiChatResult, { status: "OK" }>
-  | { status: "CONVERSATION_NOT_FOUND" | "CONVERSATION_FULL" | "TOO_MANY_CONVERSATIONS" }
+  | { status: "CONVERSATION_NOT_FOUND" | "CONVERSATION_FULL" | "TOO_MANY_CONVERSATIONS" | "TOO_MANY_PENDING_ACTIONS" }
 
-type SaveResult = Extract<ConverseResult, { status: "OK" | "CONVERSATION_NOT_FOUND" | "CONVERSATION_FULL" | "TOO_MANY_CONVERSATIONS" }>
+type SaveResult = Extract<
+  ConverseResult,
+  { status: "OK" | "CONVERSATION_NOT_FOUND" | "CONVERSATION_FULL" | "TOO_MANY_CONVERSATIONS" | "TOO_MANY_PENDING_ACTIONS" }
+>
 
 export function aiConversationsService(prisma: PrismaClient) {
   const ai = aiService(prisma)
 
-  // Enregistrer l'échange en UNE transaction. Un verrou court, propre à l'utilisateur, met en file ses écritures :
-  // les quotas sont revérifiés sous ce verrou, donc respectés même si plusieurs requêtes arrivent en même temps.
-  // Le verrou ne couvre jamais l'appel au fournisseur (il ne dure que le temps de l'écriture).
+  // Enregistrer l'échange en UNE transaction, avec les actions proposées. Un verrou court, propre à l'utilisateur, met en file ses
+  // écritures : les quotas (conversations, messages, actions en attente) sont revérifiés sous ce verrou, donc respectés même si
+  // plusieurs requêtes arrivent en même temps. Le verrou ne couvre jamais l'appel au fournisseur.
   async function save(
     user: AuthenticatedUser,
     conversationId: string | undefined,
@@ -67,10 +100,11 @@ export function aiConversationsService(prisma: PrismaClient) {
     receivedAt: Date,
     reply: string,
     toolsUsed: TicketToolName[],
+    proposals: Proposal[],
   ): Promise<SaveResult> {
     try {
       return await prisma.$transaction(async (tx): Promise<SaveResult> => {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_NAMESPACE}::int, ${user.id}::int)`
+        await lockUserAiWrites(tx, user.id)
 
         let id = conversationId
         if (id) {
@@ -84,15 +118,38 @@ export function aiConversationsService(prisma: PrismaClient) {
           if ((await tx.aiConversation.count({ where: { userId: user.id } })) >= CONVERSATION_MAX_PER_USER) {
             return { status: "TOO_MANY_CONVERSATIONS" }
           }
+        }
+
+        // Quota d'actions en attente, revérifié sous le verrou : seules comptent les actions NON périmées.
+        const now = new Date()
+        if (proposals.length > 0) {
+          const pending = await tx.aiPendingAction.count({ where: activePendingWhere(user.id, now) })
+          if (pending + proposals.length > AI_MAX_PENDING_PER_USER) return { status: "TOO_MANY_PENDING_ACTIONS" }
+        }
+
+        if (!id) {
           id = (await tx.aiConversation.create({ data: { userId: user.id, title: deriveTitle(message) }, select: { id: true } })).id
         }
 
         // Le message de l'utilisateur porte l'heure de réception, pas celle de la fin de l'appel au fournisseur.
+        // Une réponse qui contient des actions proposées reçoit la phrase fixe du serveur (elle est stockée avec la réponse).
+        const storedReply = proposals.length > 0 ? `${reply}\n\n${PENDING_ACTION_NOTICE}` : reply
         await tx.aiMessage.create({ data: { conversationId: id, role: "USER", content: message, createdAt: receivedAt } })
-        await tx.aiMessage.create({ data: { conversationId: id, role: "ASSISTANT", content: reply, toolsUsed } })
+        await tx.aiMessage.create({ data: { conversationId: id, role: "ASSISTANT", content: storedReply, toolsUsed } })
         // Dernière activité : c'est elle que la purge des conversations inactives compare à la durée de conservation.
         await tx.aiConversation.update({ where: { id }, data: { updatedAt: new Date() } })
-        return { status: "OK", conversationId: id, reply, toolsUsed }
+
+        // Les actions proposées sont enregistrées « en attente » AVEC l'échange : si quoi que ce soit échoue, aucune n'existe.
+        const expiresAt = new Date(now.getTime() + AI_ACTION_TTL_MINUTES * 60_000)
+        const pendingActions: PendingActionView[] = []
+        for (const proposal of proposals) {
+          const created = await tx.aiPendingAction.create({
+            data: { userId: user.id, conversationId: id, kind: proposal.kind, payload: proposal.payload, summary: proposal.summary, expiresAt },
+            select: { id: true, kind: true, summary: true, expiresAt: true },
+          })
+          pendingActions.push(created)
+        }
+        return { status: "OK", conversationId: id, reply: storedReply, toolsUsed, pendingActions }
       })
     } catch (error) {
       // Conversation supprimée par son propriétaire pendant l'appel au fournisseur.
@@ -137,11 +194,19 @@ export function aiConversationsService(prisma: PrismaClient) {
         return { status: "TOO_MANY_CONVERSATIONS" }
       }
 
+      // Place restante pour de nouvelles actions en attente (contrôle rapide ; save() le refait sous verrou).
+      // Les actions périmées ne comptent pas. Sans actions activées, aucune proposition n'est possible.
+      let proposalBudget = 0
+      if (aiActionsEnabled()) {
+        const pending = await prisma.aiPendingAction.count({ where: activePendingWhere(user.id, receivedAt) })
+        proposalBudget = Math.max(0, AI_MAX_PENDING_PER_USER - pending)
+      }
+
       const window = buildContextWindow(history, { role: "user", content: input.message })
-      const result = await ai.chat(window, user)
+      const result = await ai.chat(window, user, { proposalBudget })
       if (result.status !== "OK") return result // rien n'est enregistré en cas d'échec
 
-      return save(user, input.conversationId, input.message, receivedAt, result.reply, result.toolsUsed)
+      return save(user, input.conversationId, input.message, receivedAt, result.reply, result.toolsUsed, result.proposals)
     },
 
     // Mes conversations, de la plus récemment active à la plus ancienne.
@@ -193,7 +258,12 @@ export function aiConversationsService(prisma: PrismaClient) {
       const where = { updatedAt: { lt: cutoff } }
       const messages = await prisma.aiMessage.count({ where: { conversation: where } })
       const conversations = options.dryRun ? await prisma.aiConversation.count({ where }) : (await prisma.aiConversation.deleteMany({ where })).count
-      return { conversations, messages, cutoff }
+
+      // Actions proposées périmées depuis plus d'un jour (confirmées, annulées ou jamais traitées) : plus aucune utilité.
+      // Celles des conversations supprimées ci-dessus sont déjà parties par cascade.
+      const actionsWhere = { expiresAt: { lt: new Date((options.now ?? new Date()).getTime() - AI_ACTION_CLEANUP_GRACE_DAYS * MS_PER_DAY) } }
+      const pendingActions = options.dryRun ? await prisma.aiPendingAction.count({ where: actionsWhere }) : (await prisma.aiPendingAction.deleteMany({ where: actionsWhere })).count
+      return { conversations, messages, pendingActions, cutoff }
     },
   }
 }
