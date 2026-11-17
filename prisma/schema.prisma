@@ -1,0 +1,187 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  CLOSED
+}
+
+model Ticket {
+  id          Int          @id @default(autoincrement())
+  title       String
+  description String
+  status      TicketStatus @default(OPEN)
+  // Nullable : les anciens tickets n'ont pas d'auteur connu.
+  createdById Int?
+  createdBy   User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([createdById])
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  AGENT
+  USER
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+enum ActionTokenPurpose {
+  INVITATION
+  PASSWORD_RESET
+}
+
+model User {
+  id           Int           @id @default(autoincrement())
+  email        String        @unique
+  passwordHash String?
+  role         Role
+  status       UserStatus    @default(INVITED)
+  sessions     Session[]
+  actionTokens ActionToken[]
+  tickets      Ticket[]
+  // Historique : supprimer un compte ne supprime jamais ses lignes d'audit (SetNull sur AuditLog).
+  auditAsActor  AuditLog[] @relation("AuditActor")
+  auditAsTarget AuditLog[] @relation("AuditTarget")
+  // Conversations avec l'assistant IA : supprimer un compte supprime aussi ses conversations (Cascade).
+  aiConversations AiConversation[]
+  aiPendingActions AiPendingAction[]
+}
+
+model Session {
+  id        String    @id @default(uuid())
+  userId    Int
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+}
+
+model ActionToken {
+  tokenHash String             @id
+  userId    Int
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose   ActionTokenPurpose
+  expiresAt DateTime
+}
+
+enum AuditAction {
+  USER_CREATED
+  USER_INVITATION_CREATED
+  USER_INVITATION_SEND_FAILED
+  USER_DISABLED
+  USER_ENABLED
+  INVITATION_ACCEPTED
+  PASSWORD_RESET_COMPLETED
+  SUPER_ADMIN_BOOTSTRAPPED
+  ASSISTANT_TICKET_CREATED
+  ASSISTANT_TICKET_STATUS_CHANGED
+}
+
+// Registre des actions sensibles : on y ajoute des lignes, on ne les modifie ni ne les supprime.
+model AuditLog {
+  id           Int         @id @default(autoincrement())
+  createdAt    DateTime    @default(now())
+  action       AuditAction
+  // Qui a agi (null pour le script CLI) et son rôle au moment de l'action.
+  actorId      Int?
+  actor        User?       @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorRole    Role?
+  // Compte concerné par l'action.
+  targetUserId Int?
+  targetUser   User?       @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+  // Informations utiles et non sensibles (jamais de mot de passe, token ou hash).
+  metadata     Json?
+
+  @@index([createdAt, id])
+  @@index([action])
+  @@index([actorId])
+  @@index([targetUserId])
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+}
+
+// Une conversation avec l'assistant IA. Elle n'appartient qu'à son utilisateur : personne d'autre ne la lit.
+model AiConversation {
+  id        String      @id @default(uuid())
+  userId    Int
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Début du premier message, pour retrouver la conversation dans une liste.
+  title     String
+  createdAt DateTime    @default(now())
+  // Dernière activité : mise à jour à chaque échange enregistré. Elle sert à la purge des conversations inactives.
+  updatedAt DateTime    @updatedAt
+  messages  AiMessage[]
+  pendingActions AiPendingAction[]
+
+  @@index([userId, updatedAt])
+  @@index([updatedAt])
+}
+
+// Un message de la conversation : le texte de l'utilisateur ou la réponse FINALE de l'assistant.
+// Les appels de fonctions, leurs résultats et le raisonnement du modèle ne sont jamais stockés.
+// Supprimer la conversation supprime ses messages (Cascade, appliqué par PostgreSQL).
+model AiMessage {
+  id             Int            @id @default(autoincrement())
+  conversationId String
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           AiMessageRole
+  content        String
+  // Noms des outils exécutés avec succès pour produire cette réponse (jamais leurs arguments ni leur contenu).
+  toolsUsed      String[]       @default([])
+  createdAt      DateTime       @default(now())
+
+  @@index([conversationId, id])
+}
+
+enum AiPendingActionKind {
+  CREATE_TICKET
+  CHANGE_STATUS
+}
+
+enum AiPendingActionStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+// Une action proposée par l'assistant, EN ATTENTE de la confirmation de l'utilisateur. Rien n'est écrit sur les tickets
+// tant qu'elle n'est pas confirmée par une requête HTTP vérifiée. Supprimée avec sa conversation ou son compte (Cascade).
+model AiPendingAction {
+  id             String                @id @default(uuid())
+  userId         Int
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   AiConversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  kind           AiPendingActionKind
+  status         AiPendingActionStatus @default(PENDING)
+  // Données validées de l'action (création : titre et description ; statut : ticket, statut attendu, nouveau statut).
+  // Effacées ({}) dès que l'action est résolue.
+  payload        Json
+  // Résumé écrit par le SERVEUR : c'est ce que l'utilisateur confirme, jamais une phrase du modèle. Effacé à la résolution.
+  summary        String
+  expiresAt      DateTime
+  createdAt      DateTime              @default(now())
+  resolvedAt     DateTime?
+
+  @@index([userId, status, expiresAt])
+  @@index([conversationId])
+  @@index([expiresAt])
+}

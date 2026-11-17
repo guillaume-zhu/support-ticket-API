@@ -4,20 +4,43 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "tsx watch src/index.ts"
+    "test": "node --import tsx scripts/run-tests.ts",
+    "test:unit": "vitest run tests/unit",
+    "dev": "tsx watch src/index.ts",
+    "build": "prisma generate && tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "bootstrap:super-admin": "tsx scripts/bootstrap-super-admin.ts",
+    "ai:purge-conversations": "tsx src/jobs/purge-ai-conversations.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "express": "^5.3.0"
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "argon2": "0.45.1",
+    "dotenv": "18.0.9",
+    "express": "^5.3.0",
+    "express-rate-limit": "8.7.4",
+    "jose": "6.2.14",
+    "pg": "8.23.1",
+    "swagger-ui-express": "5.0.1"
   },
   "devDependencies": {
+    "@apidevtools/swagger-parser": "13.1.0",
+    "@inquirer/password": "5.2.5",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.6",
+    "@types/pg": "8.23.1",
+    "@types/supertest": "^7.2.1",
+    "@types/swagger-ui-express": "4.1.8",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "prisma": "7.10.1",
+    "supertest": "^7.3.2",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
   }
 }

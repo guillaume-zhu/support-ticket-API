@@ -3,4 +3,10 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.test.example
+.vitest/
 .DS_Store
+src/generated/prisma/
+
+# Preuves brutes de l'audit de sécurité : conservées en local uniquement
+/audit/evidence/
