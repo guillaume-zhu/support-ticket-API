@@ -7,3 +7,6 @@ dist/
 .vitest/
 .DS_Store
 src/generated/prisma/
+
+# Preuves brutes de l'audit de sécurité : conservées en local uniquement
+/audit/evidence/

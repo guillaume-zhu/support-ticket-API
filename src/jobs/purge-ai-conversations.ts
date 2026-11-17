@@ -30,9 +30,13 @@ async function main() {
     return
   }
 
-  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) })
+  const prisma = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+  })
   try {
-    const { conversations, messages, pendingActions, cutoff } = await aiConversationsService(prisma).purgeInactive({ retentionDays, dryRun })
+    const { conversations, messages, pendingActions, cutoff } = await aiConversationsService(
+      prisma,
+    ).purgeInactive({ retentionDays, dryRun })
     console.log(
       `${dryRun ? "[simulation] " : ""}Conversations IA sans activité depuis plus de ${retentionDays} jours (dernière activité avant ${cutoff.toISOString()}) : ` +
         (dryRun
