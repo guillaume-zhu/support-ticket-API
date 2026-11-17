@@ -90,7 +90,9 @@ export function authService(prisma: PrismaClient) {
         await argon2.verify(DUMMY_PASSWORD_HASH, password)
         return null
       }
-      if (!(await argon2.verify(user.passwordHash, password))) {
+      // Mémoriser le hash qui vient d'être vérifié : il sert à détecter une réinitialisation concurrente.
+      const verifiedHash = user.passwordHash
+      if (!(await argon2.verify(verifiedHash, password))) {
         return null
       }
 
@@ -102,6 +104,32 @@ export function authService(prisma: PrismaClient) {
       await prisma.session.create({
         data: { id: sessionId, userId: user.id, expiresAt },
       })
+
+      // Garde anti-course (VULN-002) : la vérification du mot de passe (Argon2, lente) et la création de la session ne sont
+      // pas atomiques. Une réinitialisation peut s'intercaler et révoquer toutes les sessions AVANT que celle-ci existe :
+      // elle y échapperait. Sous le MÊME verrou par utilisateur que refresh/resetPassword/disable, on relit l'état validé le
+      // plus récent ; si le mot de passe a changé (réinitialisation) ou si le compte n'est plus actif, la session repose sur
+      // un identifiant périmé : on la révoque et la connexion est refusée (aucun token renvoyé).
+      const staleLogin = await prisma.$transaction(async (tx) => {
+        await lockUserSessions(tx, user.id)
+        const fresh = await tx.user.findUnique({
+          where: { id: user.id },
+          select: { status: true, passwordHash: true },
+        })
+        if (!fresh || fresh.status !== "ACTIVE" || fresh.passwordHash !== verifiedHash) {
+          await tx.session.updateMany({
+            where: { id: sessionId, revokedAt: null },
+            data: { revokedAt: new Date() },
+          })
+          return true
+        }
+        return false
+      })
+      // Refus propre : on ne renvoie AUCUN token pour un mot de passe devenu périmé. Le controller répond alors 401.
+      if (staleLogin) {
+        return null
+      }
+
       return tokens
     },
 
