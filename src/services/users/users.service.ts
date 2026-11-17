@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client.js"
 import { generateActionToken } from "../../utils/credentials.js"
 import { recordAudit, type AuditActor } from "../shared/audit.service.js"
+import { lockUserSessions } from "../shared/session-lock.js"
 import { isEmailConfigured, sendEmail } from "../shared/email.service.js"
 
 const INVITATION_LIFETIME_HOURS = 24
@@ -102,6 +103,8 @@ export function usersService(prisma: PrismaClient) {
 
       // Changer le statut, révoquer les sessions et écrire l'audit dans une seule transaction.
       const disabled = await prisma.$transaction(async (tx) => {
+        // Même verrou que refresh : une session créée par un renouvellement en cours ne peut pas échapper à la révocation.
+        await lockUserSessions(tx, id)
         const updated = await tx.user.updateMany({
           where: { id, status: "ACTIVE", role: { not: "SUPER_ADMIN" } },
           data: { status: "DISABLED" },

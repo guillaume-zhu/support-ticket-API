@@ -9,6 +9,7 @@ import {
   jwtKey,
   parseSubjectId,
 } from "../../utils/jwt.js"
+import { lockUserSessions } from "../shared/session-lock.js"
 
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -120,6 +121,9 @@ export function authService(prisma: PrismaClient) {
 
       // Transaction : vérifier l'ancienne session, la révoquer et créer la nouvelle
       const rotated = await prisma.$transaction(async (tx) => {
+        // Verrou PAR UTILISATEUR, pris en premier : une réinitialisation ou une désactivation concurrente attend la fin
+        // de ce renouvellement (et voit donc la nouvelle session) ou le précède (et ce renouvellement est alors refusé).
+        await lockUserSessions(tx, userId)
         const session = await tx.session.findUnique({
           where: { id: oldSessionId },
           include: { user: true },

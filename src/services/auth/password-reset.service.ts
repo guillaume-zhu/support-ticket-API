@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client.js"
 import { generateActionToken, hashActionToken, hashPassword } from "../../utils/credentials.js"
 import { recordAudit } from "../shared/audit.service.js"
+import { lockUserSessions } from "../shared/session-lock.js"
 import { isEmailConfigured, sendEmail } from "../shared/email.service.js"
 
 // Réinitialisation du mot de passe par code envoyé par email
@@ -82,7 +83,7 @@ export function passwordResetService(prisma: PrismaClient) {
       const tokenHash = hashActionToken(token)
       const existing = await prisma.actionToken.findUnique({
         where: { tokenHash },
-        select: { purpose: true, expiresAt: true, user: { select: { status: true } } },
+        select: { userId: true, purpose: true, expiresAt: true, user: { select: { status: true } } },
       })
       if (
         !existing ||
@@ -98,6 +99,9 @@ export function passwordResetService(prisma: PrismaClient) {
       // Consommer le code, changer le mot de passe et révoquer les sessions ensemble.
       try {
         return await prisma.$transaction(async (tx) => {
+          // Verrou PAR UTILISATEUR, pris en premier : un refresh en cours se termine avant la révocation globale
+          // ci-dessous, qui voit alors sa nouvelle session. Le code est relu après le verrou (état validé le plus récent).
+          await lockUserSessions(tx, existing.userId)
           const reset = await tx.actionToken.findUnique({
             where: { tokenHash },
             include: { user: true },
